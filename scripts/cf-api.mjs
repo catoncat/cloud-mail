@@ -104,7 +104,6 @@ export async function upsertDnsRecord(zoneId, record) {
   const existing = await cfFetch(`/zones/${zoneId}/dns_records?${params.toString()}`);
   const matched = (existing.result ?? []).find((item) => {
     if (item.content !== content) return false;
-    if (type === "MX") return Number(item.priority ?? 0) === Number(record.priority ?? 0);
     return true;
   });
   if (matched) return matched;
