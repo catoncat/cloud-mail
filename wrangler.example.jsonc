@@ -1,0 +1,28 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "cloud-mail-intake",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-06-18",
+  "workers_dev": true,
+  "preview_urls": false,
+  "routes": [
+    {
+      "pattern": "mail.example.com",
+      "custom_domain": true
+    }
+  ],
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  },
+  "vars": {
+    "MAX_RAW_BYTES": "1048576"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "cloud-mail-intake",
+      "database_id": "REPLACE_WITH_D1_DATABASE_ID"
+    }
+  ]
+}

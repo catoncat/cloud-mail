@@ -1,0 +1,13 @@
+node_modules/
+.wrangler/
+.dev.vars
+.env
+.env.*
+!.env.example
+.secrets/
+config/domains.json
+config/*.local.json
+config/*.secret.json
+wrangler.jsonc
+worker-configuration.d.ts
+*.log

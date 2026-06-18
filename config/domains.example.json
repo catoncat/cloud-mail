@@ -1,0 +1,20 @@
+{
+  "api_host": "mail.example.com",
+  "worker_name": "cloud-mail-intake",
+  "database_name": "cloud-mail-intake",
+  "database_id": "",
+  "domains": [
+    {
+      "domain": "mailbox.example.com",
+      "zone": "example.com",
+      "enabled": true,
+      "configure_dns": true
+    },
+    {
+      "domain": "example.net",
+      "zone": "example.net",
+      "enabled": true,
+      "configure_dns": true
+    }
+  ]
+}
