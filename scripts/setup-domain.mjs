@@ -48,7 +48,7 @@ async function configureWorkerDomains() {
 
 async function configureCloudflareDomains() {
   const zones = new Map();
-  for (const entry of config.domains) {
+  for (const entry of [...config.domains, ...(config.forwards ?? [])]) {
     const zone = await resolveZone(entry.domain, entry.zone);
     zones.set(zone.id, { zone, entries: [...(zones.get(zone.id)?.entries ?? []), entry] });
   }

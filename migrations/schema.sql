@@ -28,6 +28,15 @@ CREATE TABLE IF NOT EXISTS messages (
   FOREIGN KEY (domain) REFERENCES domains(domain) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS forwards (
+  domain TEXT PRIMARY KEY,
+  zone TEXT NOT NULL DEFAULT '',
+  destination TEXT NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_messages_recipient_received
   ON messages (recipient, received_at DESC);
 
@@ -39,3 +48,6 @@ CREATE INDEX IF NOT EXISTS idx_messages_code
 
 CREATE INDEX IF NOT EXISTS idx_messages_link
   ON messages (link);
+
+CREATE INDEX IF NOT EXISTS idx_forwards_destination
+  ON forwards (destination);

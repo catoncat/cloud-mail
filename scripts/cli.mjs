@@ -37,6 +37,8 @@ async function main() {
       return printJson(await workerFetch("GET", "/healthz"));
     case "domains":
       return domainsCommand(args.slice(1));
+    case "forwards":
+      return forwardsCommand(args.slice(1));
     case "messages":
     case "mail":
       return messagesCommand(args.slice(1));
@@ -76,6 +78,8 @@ Worker API:
   cloud-mail health
   cloud-mail domains list
   cloud-mail domains upsert --domain mailbox.example.com --zone example.com
+  cloud-mail forwards list
+  cloud-mail forwards upsert --domain example.com --zone example.com --destination you@gmail.com
   cloud-mail messages --email test@mailbox.example.com --limit 20
   cloud-mail messages --domain mailbox.example.com --limit 20
   cloud-mail latest-code --email test@mailbox.example.com
@@ -90,7 +94,9 @@ async function configCommand(rest) {
   const sub = rest[0] ?? "show";
   if (sub === "show" || sub === "list") return printJson(loadConfig(configPath(rest.slice(1))));
   if (sub === "add") return addDomain(rest.slice(1));
+  if (sub === "add-forward") return addForward(rest.slice(1));
   if (sub === "remove" || sub === "rm") return removeDomain(rest.slice(1));
+  if (sub === "remove-forward" || sub === "rm-forward") return removeForward(rest.slice(1));
   if (sub === "set") return setConfig(rest.slice(1));
   throw new Error(`Unknown config command: ${sub}`);
 }
@@ -113,6 +119,26 @@ function addDomain(rest) {
   console.log(`[ok] config domain saved: ${domain}`);
 }
 
+function addForward(rest) {
+  const path = configPath(rest);
+  const raw = readConfigRaw(path);
+  const domain = normalizeDomain(requiredOption(rest, "--domain"));
+  const zone = normalizeDomain(option(rest, "--zone") ?? "");
+  const destination = requiredOption(rest, "--destination").trim().toLowerCase();
+  const existing = (raw.forwards ?? []).find((entry) => normalizeDomain(entry.domain) === domain);
+  const next = {
+    domain,
+    zone,
+    destination,
+    enabled: !has(rest, "--disabled"),
+    configure_dns: !has(rest, "--no-dns"),
+  };
+  if (existing) Object.assign(existing, next);
+  else raw.forwards = [...(raw.forwards ?? []), next];
+  writeConfigRaw(path, raw);
+  console.log(`[ok] config forward saved: ${domain} -> ${destination}`);
+}
+
 function removeDomain(rest) {
   const path = configPath(rest);
   const raw = readConfigRaw(path);
@@ -120,6 +146,15 @@ function removeDomain(rest) {
   raw.domains = (raw.domains ?? []).filter((entry) => normalizeDomain(entry.domain) !== domain);
   writeConfigRaw(path, raw);
   console.log(`[ok] config domain removed: ${domain}`);
+}
+
+function removeForward(rest) {
+  const path = configPath(rest);
+  const raw = readConfigRaw(path);
+  const domain = normalizeDomain(requiredOption(rest, "--domain"));
+  raw.forwards = (raw.forwards ?? []).filter((entry) => normalizeDomain(entry.domain) !== domain);
+  writeConfigRaw(path, raw);
+  console.log(`[ok] config forward removed: ${domain}`);
 }
 
 function setConfig(rest) {
@@ -155,6 +190,21 @@ async function domainsCommand(rest) {
     return printJson(await workerFetch("POST", "/admin/domains", body));
   }
   throw new Error(`Unknown domains command: ${sub}`);
+}
+
+async function forwardsCommand(rest) {
+  const sub = rest[0] ?? "list";
+  if (sub === "list") return printJson(await workerFetch("GET", "/admin/forwards"));
+  if (sub === "upsert" || sub === "add") {
+    const body = {
+      domain: requiredOption(rest, "--domain"),
+      zone: option(rest, "--zone") ?? option(rest, "--domain"),
+      destination: requiredOption(rest, "--destination"),
+      enabled: !has(rest, "--disabled"),
+    };
+    return printJson(await workerFetch("POST", "/admin/forwards", body));
+  }
+  throw new Error(`Unknown forwards command: ${sub}`);
 }
 
 async function messagesCommand(rest) {
@@ -225,6 +275,7 @@ function readConfigRaw(path) {
       database_name: "cloud-mail-intake",
       database_id: "",
       domains: [],
+      forwards: [],
     };
   }
   return JSON.parse(readFileSync(path, "utf8"));

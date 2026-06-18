@@ -16,5 +16,14 @@
       "enabled": true,
       "configure_dns": true
     }
+  ],
+  "forwards": [
+    {
+      "domain": "example.com",
+      "zone": "example.com",
+      "destination": "you@gmail.com",
+      "enabled": true,
+      "configure_dns": true
+    }
   ]
 }

@@ -28,6 +28,7 @@ cp wrangler.example.jsonc wrangler.jsonc
 cloud-mail config set --api-host mail.example.com --worker-name cloud-mail-intake
 cloud-mail config add --domain mailbox.example.com --zone example.com
 cloud-mail config add --domain example.net --zone example.net
+cloud-mail config add-forward --domain example.com --zone example.com --destination you@gmail.com
 cloud-mail config show
 ```
 
@@ -46,11 +47,22 @@ This writes `config/domains.json`:
       "enabled": true,
       "configure_dns": true
     }
+  ],
+  "forwards": [
+    {
+      "domain": "example.com",
+      "zone": "example.com",
+      "destination": "you@gmail.com",
+      "enabled": true,
+      "configure_dns": true
+    }
   ]
 }
 ```
 
 For additional domains, add another entry. `zone` is the Cloudflare zone that owns the DNS records. If omitted, setup tries to find it by suffix.
+
+Use `forwards` for domains that should keep forwarding to a verified destination address instead of being stored in D1. This is useful when one Cloudflare zone has both an apex domain that should forward to Gmail and a subdomain that should be stored by the Worker.
 
 If the Cloudflare account cannot create more D1 databases, set `database_name` and `database_id` to an existing empty D1 database. Do not delete existing D1 databases from this setup script.
 
@@ -76,6 +88,7 @@ The setup script writes the admin token to `.secrets/mail-admin-token.txt` and u
 
 ```bash
 cloud-mail domains list
+cloud-mail forwards list
 cloud-mail messages --email test@mailbox.example.com
 cloud-mail latest-code --email test@mailbox.example.com
 cloud-mail latest-link --email test@mailbox.example.com
@@ -86,7 +99,9 @@ Raw Worker API access is also available:
 
 ```bash
 cloud-mail api GET /admin/domains
+cloud-mail api GET /admin/forwards
 cloud-mail api POST /admin/domains --json '{"domain":"x.example.com","zone":"example.com","enabled":true}'
+cloud-mail api POST /admin/forwards --json '{"domain":"example.com","zone":"example.com","destination":"you@gmail.com","enabled":true}'
 ```
 
 ## Agent Skill

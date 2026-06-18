@@ -73,6 +73,14 @@ export function loadConfig(pathname) {
     enabled: entry.enabled !== false,
     configure_dns: entry.configure_dns !== false,
   }));
+  config.forwards = (config.forwards ?? []).map((entry) => ({
+    ...entry,
+    domain: normalizeDomain(entry.domain),
+    zone: normalizeDomain(entry.zone),
+    destination: String(entry.destination ?? "").trim().toLowerCase(),
+    enabled: entry.enabled !== false,
+    configure_dns: entry.configure_dns !== false,
+  }));
   if (!config.api_host) throw new Error("config.api_host is required");
   if (!config.worker_name) throw new Error("config.worker_name is required");
   if (!config.domains.length) throw new Error("config.domains must contain at least one domain");

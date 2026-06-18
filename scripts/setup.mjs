@@ -18,6 +18,7 @@ const databaseId = ensureD1Database(config.database_name, config.database_id);
 updateWrangler(config, databaseId);
 run("npx", ["wrangler", "d1", "execute", config.database_name, "--remote", "--file", "migrations/schema.sql"]);
 seedConfiguredDomains(config);
+seedConfiguredForwards(config);
 putSecret("MAIL_ADMIN_TOKEN", readFileSync(".secrets/mail-admin-token.txt", "utf8").trim());
 
 if (!skipDeploy) {
@@ -110,6 +111,33 @@ function seedConfiguredDomains(currentConfig) {
          updated_at = excluded.updated_at`,
     ]);
     console.log(`[ok] D1 domain allowlist: ${entry.domain}`);
+  }
+}
+
+function seedConfiguredForwards(currentConfig) {
+  const now = new Date().toISOString();
+  for (const entry of currentConfig.forwards ?? []) {
+    const domain = sqlString(entry.domain);
+    const zone = sqlString(entry.zone || entry.domain);
+    const destination = sqlString(entry.destination);
+    const enabled = entry.enabled !== false ? 1 : 0;
+    const timestamp = sqlString(now);
+    run("npx", [
+      "wrangler",
+      "d1",
+      "execute",
+      currentConfig.database_name,
+      "--remote",
+      "--command",
+      `INSERT INTO forwards (domain, zone, destination, enabled, created_at, updated_at)
+       VALUES (${domain}, ${zone}, ${destination}, ${enabled}, ${timestamp}, ${timestamp})
+       ON CONFLICT(domain) DO UPDATE SET
+         zone = excluded.zone,
+         destination = excluded.destination,
+         enabled = excluded.enabled,
+         updated_at = excluded.updated_at`,
+    ]);
+    console.log(`[ok] D1 forward domain: ${entry.domain} -> ${entry.destination}`);
   }
 }
 

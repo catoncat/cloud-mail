@@ -44,6 +44,18 @@ Each config entry has:
 
 `domain` is the mailbox domain after `@`. `zone` is the Cloudflare zone that owns the DNS records.
 
+Use `forwards` for domains that should continue forwarding to a verified destination mailbox instead of being stored in D1:
+
+```json
+{
+  "domain": "example.com",
+  "zone": "example.com",
+  "destination": "you@gmail.com",
+  "enabled": true,
+  "configure_dns": true
+}
+```
+
 ## CLI Workflows
 
 Create local config:
@@ -58,6 +70,7 @@ Add or update a mailbox domain:
 
 ```bash
 cloud-mail config add --domain mailbox.example.com --zone example.com
+cloud-mail config add-forward --domain example.com --zone example.com --destination you@gmail.com
 cloud-mail config show
 ```
 
@@ -78,6 +91,7 @@ Read mail:
 ```bash
 cloud-mail health
 cloud-mail domains list
+cloud-mail forwards list
 cloud-mail messages --email test@mailbox.example.com --limit 20
 cloud-mail messages --domain mailbox.example.com --limit 20
 cloud-mail latest-code --email test@mailbox.example.com
@@ -91,10 +105,12 @@ Prefer CLI wrappers. If a one-off endpoint is needed:
 
 ```bash
 cloud-mail api GET /admin/domains
+cloud-mail api GET /admin/forwards
 cloud-mail api GET '/admin/messages?email=test@mailbox.example.com&limit=10'
 cloud-mail api GET '/admin/latest-code?email=test@mailbox.example.com'
 cloud-mail api GET '/admin/latest-link?email=test@mailbox.example.com'
 cloud-mail api POST /admin/domains --json '{"domain":"x.example.com","zone":"example.com","enabled":true}'
+cloud-mail api POST /admin/forwards --json '{"domain":"example.com","zone":"example.com","destination":"you@gmail.com","enabled":true}'
 cloud-mail api DELETE '/admin/messages?email=test@mailbox.example.com'
 ```
 

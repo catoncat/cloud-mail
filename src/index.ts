@@ -34,6 +34,15 @@ interface MessageRow {
   headers_json: string;
 }
 
+interface ForwardRow {
+  domain: string;
+  zone: string;
+  destination: string;
+  enabled: number;
+  created_at: string;
+  updated_at: string;
+}
+
 const DEFAULT_MAX_RAW_BYTES = 1_048_576;
 const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 100;
@@ -59,6 +68,14 @@ export default {
 
     if (request.method === "POST" && url.pathname === "/admin/domains") {
       return upsertDomain(request, env);
+    }
+
+    if (request.method === "GET" && url.pathname === "/admin/forwards") {
+      return listForwards(env);
+    }
+
+    if (request.method === "POST" && url.pathname === "/admin/forwards") {
+      return upsertForward(request, env);
     }
 
     if (request.method === "GET" && url.pathname === "/admin/messages") {
@@ -90,6 +107,11 @@ export default {
 
     const domain = await getDomain(parts.domain, env);
     if (!domain || !domain.enabled) {
+      const forward = await getForward(parts.domain, env);
+      if (forward?.enabled && forward.destination) {
+        await message.forward(forward.destination);
+        return;
+      }
       message.setReject("Recipient domain is not configured.");
       return;
     }
@@ -148,6 +170,11 @@ async function listDomains(env: Env): Promise<Response> {
   return json({ ok: true, items: result.results ?? [] });
 }
 
+async function listForwards(env: Env): Promise<Response> {
+  const result = await env.DB.prepare("SELECT * FROM forwards ORDER BY domain ASC").all<ForwardRow>();
+  return json({ ok: true, items: result.results ?? [] });
+}
+
 async function upsertDomain(request: Request, env: Env): Promise<Response> {
   const body = await readJson<{ domain?: string; zone?: string; enabled?: boolean | number }>(request);
   const domain = normalizeDomain(body?.domain ?? "");
@@ -166,6 +193,31 @@ async function upsertDomain(request: Request, env: Env): Promise<Response> {
   ).bind(domain, zone, enabled, now).run();
 
   return json({ ok: true, domain, zone, enabled: Boolean(enabled) });
+}
+
+async function upsertForward(request: Request, env: Env): Promise<Response> {
+  const body = await readJson<{ domain?: string; zone?: string; destination?: string; enabled?: boolean | number }>(
+    request,
+  );
+  const domain = normalizeDomain(body?.domain ?? "");
+  const destination = normalizeEmail(body?.destination ?? "");
+  if (!domain) return json({ ok: false, error: "domain_required" }, 400);
+  if (!destination || !splitEmail(destination)) return json({ ok: false, error: "destination_required" }, 400);
+  const zone = normalizeDomain(body?.zone ?? "") || domain;
+  const enabled = body?.enabled === undefined ? 1 : Number(Boolean(body.enabled));
+  const now = new Date().toISOString();
+
+  await env.DB.prepare(
+    `INSERT INTO forwards (domain, zone, destination, enabled, created_at, updated_at)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?5)
+     ON CONFLICT(domain) DO UPDATE SET
+       zone = excluded.zone,
+       destination = excluded.destination,
+       enabled = excluded.enabled,
+       updated_at = excluded.updated_at`,
+  ).bind(domain, zone, destination, enabled, now).run();
+
+  return json({ ok: true, domain, zone, destination, enabled: Boolean(enabled) });
 }
 
 async function listMessages(url: URL, env: Env): Promise<Response> {
@@ -220,6 +272,10 @@ async function deleteMessages(url: URL, env: Env): Promise<Response> {
 
 async function getDomain(domain: string, env: Env): Promise<DomainRow | null> {
   return env.DB.prepare("SELECT * FROM domains WHERE domain = ?1 LIMIT 1").bind(domain).first<DomainRow>();
+}
+
+async function getForward(domain: string, env: Env): Promise<ForwardRow | null> {
+  return env.DB.prepare("SELECT * FROM forwards WHERE domain = ?1 LIMIT 1").bind(domain).first<ForwardRow>();
 }
 
 async function requireAdmin(request: Request, env: Env): Promise<Response | null> {
