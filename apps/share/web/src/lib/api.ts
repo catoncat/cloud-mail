@@ -1,4 +1,4 @@
-import type { DomainStat, LinkView, MailboxStat, MessageFeed, Overview, UsageReport, Zone } from "./types";
+import type { DomainHealth, DomainStat, LinkView, MailboxStat, MessageFeed, Overview, UsageReport, Zone } from "./types";
 
 const KEY_STORAGE = "mailAdminKey";
 
@@ -35,6 +35,8 @@ export const api = {
   domains: (key: string) => request<{ domains: DomainStat[] }>("/domains", key),
   mailboxes: (key: string, domain: string) =>
     request<{ mailboxes: MailboxStat[] }>(`/domains/${encodeURIComponent(domain)}/mailboxes`, key),
+  domainHealth: (key: string, domain: string) =>
+    request<DomainHealth>(`/domains/${encodeURIComponent(domain)}/health`, key),
   links: (key: string) => request<{ links: LinkView[] }>("/links", key),
   messages: (key: string, params: { page?: number; size?: number; domain?: string; mailbox?: string } = {}) => {
     const q = new URLSearchParams();

@@ -131,7 +131,8 @@ the email can be on another domain.
 
 ### Install as PWA (desktop / phone)
 
-Open the share origin over HTTPS.
+This installs the **admin console** (`start_url` is `/admin`, so it opens the key
+prompt). Share links for other people are plain URLs, not installable apps.
 
 - **Desktop Chrome / Edge / Arc**: address bar install icon, or menu → “安装应用 / Install app”.
 - **iPhone / iPad Safari**: Share → **添加到主屏幕**.
@@ -140,8 +141,9 @@ Open the share origin over HTTPS.
 PWA endpoints:
 
 - `/manifest.webmanifest`
-- `/sw.js` (caches shell only; **never** caches `/s/*`, `?mail=`, `/api/*`, `/admin`)
-- `/icons/icon-192.png`, `/icons/icon-512.png`, `/icons/apple-touch-icon.png`
+- `/icons/icon-192.png`, `/icons/icon-512.png`, `/icons/icon-maskable.png`, `/icons/apple-touch-icon.png`
+- `/sw.js` — **no offline caching by design**. It serves a self-unregistering worker
+  that clears caches from earlier versions; OTP pages must never be served stale.
 
 ### Two public link types
 

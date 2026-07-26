@@ -23,6 +23,14 @@ export type DomainStat = {
   lastActivity: string | null;
 };
 
+/** Live Email Routing state; distinguishes "idle" from "cannot receive". */
+export type DomainHealth = {
+  domain: string;
+  zone?: string;
+  status: "routed" | "unrouted" | "unknown";
+  detail?: string;
+};
+
 export type MailboxStat = {
   mailbox: string;
   localPart: string;

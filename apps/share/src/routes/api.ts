@@ -116,6 +116,38 @@ api.post("/domains", async (c) => {
   );
 });
 
+/**
+ * Live routing health for one domain.
+ *
+ * "No mail yet" and "mail cannot arrive" look identical in the message counts,
+ * so read Email Routing directly. Without this a misrouted domain silently looks
+ * like an idle one.
+ */
+api.get("/domains/:domain/health", async (c) => {
+  const domain = normalizeDomain(c.req.param("domain"));
+  if (!domain) return c.json({ error: "invalid_domain" }, 400);
+
+  try {
+    const zone = await findZone(c.env, domain);
+    if (!zone) return c.json({ domain, status: "unknown", detail: "zone_not_found" });
+
+    const catchAll = await getCatchAll(c.env, zone.id);
+    if (!catchAll) return c.json({ domain, status: "unrouted", zone: zone.name, detail: "not_configured" });
+
+    const routed = catchAll.enabled && catchAll.target === "cloud-mail-intake";
+    return c.json({
+      domain,
+      zone: zone.name,
+      status: routed ? "routed" : "unrouted",
+      detail: `${catchAll.enabled ? "enabled" : "disabled"} -> ${catchAll.target || "none"}`,
+    });
+  } catch (err) {
+    const message = err instanceof CloudflareError ? err.message : "cloudflare_error";
+    // Cannot verify is not the same as broken; do not cry wolf.
+    return c.json({ domain, status: "unknown", detail: message });
+  }
+});
+
 api.get("/domains/:domain/mailboxes", async (c) => {
   const domain = normalizeDomain(c.req.param("domain"));
   if (!domain) return c.json({ error: "invalid_domain" }, 400);

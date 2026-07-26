@@ -101,6 +101,34 @@ function AddDomain({ apiKey, onToast }: { apiKey: string; onToast: (s: string) =
   );
 }
 
+/**
+ * "No mail yet" and "mail cannot arrive" look identical in the counts, so let the
+ * operator check Email Routing for a specific domain on demand.
+ */
+function RoutingCheck({ apiKey, domain }: { apiKey: string; domain: string }) {
+  const [enabled, setEnabled] = useState(false);
+  const { data, isFetching, error } = useQuery({
+    queryKey: ["domain-health", domain],
+    queryFn: () => api.domainHealth(apiKey, domain),
+    enabled,
+  });
+
+  if (!enabled) {
+    return (
+      <Button size="sm" variant="ghost" onClick={(e) => { e.stopPropagation(); setEnabled(true); }}>
+        检查路由
+      </Button>
+    );
+  }
+  if (isFetching) return <span className="shrink-0 text-xs text-zinc-400">检查中…</span>;
+  if (error) return <span className="shrink-0 text-xs text-zinc-400">无法检查</span>;
+  if (data?.status === "routed") return <Badge>路由正常</Badge>;
+  if (data?.status === "unrouted") {
+    return <span className="shrink-0 text-xs font-medium text-amber-600" title={data.detail}>收不到信</span>;
+  }
+  return <span className="shrink-0 text-xs text-zinc-400" title={data?.detail}>状态未知</span>;
+}
+
 export function Domains({ apiKey, onOpenDomain, onToast }: { apiKey: string; onOpenDomain: (d: string) => void; onToast: (s: string) => void }) {
   const { data, isPending, error } = useQuery({ queryKey: ["domains"], queryFn: () => api.domains(apiKey) });
 
@@ -123,6 +151,7 @@ export function Domains({ apiKey, onOpenDomain, onToast }: { apiKey: string; onO
         </div>
       </div>
       {!d.enabled && <Badge>已停用</Badge>}
+      {!clickable && d.enabled && <RoutingCheck apiKey={apiKey} domain={d.domain} />}
       {clickable && <ChevronRight className="h-4 w-4 shrink-0 text-zinc-300 dark:text-zinc-600" />}
     </Row>
   );
@@ -145,6 +174,9 @@ export function Domains({ apiKey, onOpenDomain, onToast }: { apiKey: string; onO
           <div className="mb-2.5 flex items-baseline justify-between">
             <span className="text-[12.5px] font-semibold text-zinc-700 dark:text-zinc-300">未收到过邮件</span>
             <span className="text-xs text-zinc-400">{empty.length} 个</span>
+          </div>
+          <div className="mb-2 text-xs text-zinc-400">
+            没有记录可能是未使用，也可能是收不到信。点“检查路由”确认 Email Routing 是否指向本服务。
           </div>
           <Card>{empty.map((d) => row(d, false))}</Card>
         </div>

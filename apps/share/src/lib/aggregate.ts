@@ -1,31 +1,26 @@
-import { guessService, listDomains, messagesByDomain } from "./intake";
+import { domainCounters, guessService, listDomains, messagesByDomain } from "./intake";
 import { shareUrlByMailbox } from "./store";
 import type { DomainStat, Env, IntakeMessage, MailboxStat, Overview } from "./types";
 
+/** One aggregate query, not one message fetch per domain. */
 export async function domainStats(env: Env): Promise<DomainStat[]> {
-  const domains = await listDomains(env);
-  const stats = await Promise.all(
-    domains.map(async ({ domain, enabled }) => {
-      const messages = await messagesByDomain(env, domain).catch(() => [] as IntakeMessage[]);
-      const mailboxes = new Set<string>();
-      let codes = 0;
-      let lastActivity: string | null = null;
-      for (const m of messages) {
-        if (m.recipient) mailboxes.add(m.recipient.toLowerCase());
-        if (m.code) codes += 1;
-        const at = m.received_at ?? "";
-        if (at && (!lastActivity || at > lastActivity)) lastActivity = at;
-      }
-      return {
-        domain,
-        enabled,
-        mailboxes: mailboxes.size,
-        messages: messages.length,
-        codes,
-        lastActivity,
-      } satisfies DomainStat;
-    }),
-  );
+  const [domains, counters] = await Promise.all([
+    listDomains(env),
+    domainCounters(env).catch(() => new Map()),
+  ]);
+
+  const stats = domains.map(({ domain, enabled }) => {
+    const c = counters.get(domain);
+    return {
+      domain,
+      enabled,
+      mailboxes: c?.mailboxes ?? 0,
+      messages: c?.messages ?? 0,
+      codes: c?.codes ?? 0,
+      lastActivity: c?.lastActivity ?? null,
+    } satisfies DomainStat;
+  });
+
   return stats.sort((a, b) => String(b.lastActivity ?? "").localeCompare(String(a.lastActivity ?? "")) || a.domain.localeCompare(b.domain));
 }
 
@@ -64,26 +59,18 @@ export async function mailboxStats(env: Env, domain: string, origin: string): Pr
 }
 
 export async function overview(env: Env, origin: string, links: number): Promise<Overview> {
-  const domains = await domainStats(env);
+  const [domains, counters] = await Promise.all([
+    domainStats(env),
+    domainCounters(env).catch(() => new Map()),
+  ]);
   const withMail = domains.filter((d) => d.mailboxes > 0);
-  const now = Date.now();
-  const today = new Date().toISOString().slice(0, 10);
 
-  const perDomain = await Promise.all(
-    withMail.map(async (d) => {
-      const msgs = await messagesByDomain(env, d.domain).catch(() => [] as IntakeMessage[]);
-      let todayCodes = 0;
-      let weekCodes = 0;
-      for (const m of msgs) {
-        if (!m.code) continue;
-        const at = String(m.received_at ?? "");
-        if (at.startsWith(today)) todayCodes += 1;
-        const ts = Date.parse(at);
-        if (Number.isFinite(ts) && now - ts < 7 * 86400_000) weekCodes += 1;
-      }
-      return { todayCodes, weekCodes };
-    }),
-  );
+  let codesToday = 0;
+  let codesWeek = 0;
+  for (const c of counters.values()) {
+    codesToday += c.codesToday;
+    codesWeek += c.codesWeek;
+  }
 
   const lastActivity = domains.reduce<string | null>(
     (acc, d) => (d.lastActivity && (!acc || d.lastActivity > acc) ? d.lastActivity : acc),
@@ -92,8 +79,8 @@ export async function overview(env: Env, origin: string, links: number): Promise
 
   return {
     mailboxesTotal: domains.reduce((n, d) => n + d.mailboxes, 0),
-    codesToday: perDomain.reduce((n, x) => n + x.todayCodes, 0),
-    codesWeek: perDomain.reduce((n, x) => n + x.weekCodes, 0),
+    codesToday,
+    codesWeek,
     shareLinks: links,
     lastActivity,
     domainsWithMail: withMail.length,

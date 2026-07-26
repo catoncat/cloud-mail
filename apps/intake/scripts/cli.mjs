@@ -50,6 +50,8 @@ async function main() {
       return latestCommand("latest-link", args.slice(1));
     case "clear":
       return clearCommand(args.slice(1));
+    case "reindex":
+      return reindexCommand(args.slice(1));
     case "api":
       return apiCommand(args.slice(1));
     case "token-path":
@@ -85,6 +87,8 @@ Worker API:
   cloud-mail latest-code --email test@mailbox.example.com
   cloud-mail latest-link --email test@mailbox.example.com
   cloud-mail clear --email test@mailbox.example.com
+  cloud-mail reindex --dry              # preview code/link recompute
+  cloud-mail reindex                    # rewrite stored code/link
   cloud-mail api GET /admin/domains
   cloud-mail api POST /admin/domains --json '{"domain":"x.example.com","enabled":true}'
 `);
@@ -228,6 +232,18 @@ async function clearCommand(rest) {
   return printJson(await workerFetch("DELETE", `/admin/messages?email=${encodeURIComponent(email)}`));
 }
 
+/** Recompute stored code/link with the current extractor. */
+async function reindexCommand(rest) {
+  const params = new URLSearchParams();
+  if (rest.includes("--dry")) params.set("dry", "1");
+  const email = option(rest, "--email");
+  if (email) params.set("email", email);
+  const limit = option(rest, "--limit");
+  if (limit) params.set("limit", limit);
+  const query = params.toString();
+  return printJson(await workerFetch("POST", `/admin/reindex${query ? `?${query}` : ""}`));
+}
+
 async function apiCommand(rest) {
   const method = (rest[0] ?? "GET").toUpperCase();
   const path = rest[1] ?? "";
@@ -244,7 +260,6 @@ async function workerFetch(method, path, body) {
     "silent",
     "show-error",
     "retry = 3",
-    "retry-all-errors",
     "retry-delay = 1",
     `request = "${method}"`,
     `url = "https://${config.api_host}${path}"`,
@@ -261,7 +276,9 @@ async function workerFetch(method, path, body) {
   });
   const text = response.stdout;
   const parsed = text ? safeJson(text) : null;
-  if (response.status !== 0) {
+  // A structured {ok:false} body is an answer, not a transport failure. "No code
+  // in this mailbox" is a 404 the caller should read, not a crash.
+  if (response.status !== 0 && parsed?.ok !== false) {
     throw new Error(`Worker API ${method} ${path} failed: ${response.stderr || text}`);
   }
   return parsed ?? text;

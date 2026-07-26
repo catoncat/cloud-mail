@@ -35,6 +35,52 @@ export async function messagesByDomain(env: Env, domain: string, limit = 500): P
   return data?.items ?? [];
 }
 
+export interface DomainCounters {
+  domain: string;
+  messages: number;
+  mailboxes: number;
+  codes: number;
+  codesToday: number;
+  codesWeek: number;
+  lastActivity: string | null;
+}
+
+/**
+ * Per-domain counters aggregated by intake in SQL.
+ *
+ * Dashboards must use this rather than counting messages client-side: pulling
+ * every body back just to length-check it does not survive real mail volume.
+ */
+export async function domainCounters(env: Env): Promise<Map<string, DomainCounters>> {
+  const data = await call<{
+    items?: Array<{
+      domain?: string;
+      messages?: number;
+      mailboxes?: number;
+      codes?: number;
+      codes_today?: number;
+      codes_week?: number;
+      last_activity?: string | null;
+    }>;
+  }>(env, "/admin/stats", {});
+
+  const out = new Map<string, DomainCounters>();
+  for (const row of data?.items ?? []) {
+    const domain = String(row.domain ?? "").toLowerCase();
+    if (!domain) continue;
+    out.set(domain, {
+      domain,
+      messages: Number(row.messages ?? 0),
+      mailboxes: Number(row.mailboxes ?? 0),
+      codes: Number(row.codes ?? 0),
+      codesToday: Number(row.codes_today ?? 0),
+      codesWeek: Number(row.codes_week ?? 0),
+      lastActivity: row.last_activity ?? null,
+    });
+  }
+  return out;
+}
+
 export async function messagesByMailbox(env: Env, email: string, limit = 1): Promise<IntakeMessage[]> {
   const data = await call<{ items?: IntakeMessage[] }>(env, "/admin/messages", { email, limit: String(limit) });
   return data?.items ?? [];
@@ -56,9 +102,19 @@ export function guessService(sender = "", subject = ""): string | null {
   return null;
 }
 
+/**
+ * Display-side fallbacks.
+ *
+ * Extraction is intake's job — it sees the decoded MIME and is the single source
+ * of truth. These only cover messages stored before the extractor was fixed, so
+ * historical rows do not render stale garbage. Once backfilled they never fire.
+ */
+
 function stripHtml(html: string): string {
   return html
-    .replace(/<style[\s\S]*?<\/style>|<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<!--[\s\S]*?-->/g, " ")
+    .replace(/<(style|script|head|title)[\s\S]*?<\/\1>/gi, " ")
+    .replace(/\s(?:style|bgcolor|color|width|height)\s*=\s*"[^"]*"/gi, " ")
     .replace(/<br\s*\/?>|<\/p>|<\/div>/gi, "\n")
     .replace(/<[^>]+>/g, " ")
     .replace(/&nbsp;/g, " ")
@@ -72,50 +128,20 @@ function stripHtml(html: string): string {
     .trim();
 }
 
-/** Codes that are almost certainly CSS/hex noise rather than a real OTP. */
-function looksLikeNoise(value: string): boolean {
-  return /^(\d)\1{3,}$/.test(value) || /^(?:000000|ffffff|333333|666666|999999|cccccc)$/i.test(value);
+/** Values intake used to emit before it stopped guessing: CSS greys, soft breaks. */
+const LEGACY_NOISE = /^(?:(\d)\1{3,}|000000|ffffff|333333|666666|999999|cccccc)$/i;
+const LEGACY_BOGUS_LINK = /\bw3\.org|\bschemas?[-.]|www\.=|[./=]=$/i;
+
+function usableCode(raw: string): string | null {
+  const value = raw.trim();
+  if (!value || LEGACY_NOISE.test(value)) return null;
+  return /^[A-Za-z0-9][A-Za-z0-9-]{2,11}$/.test(value) ? value : null;
 }
 
-export function extractCode(item: IntakeMessage, text: string, subject = ""): string | null {
-  // Case is preserved verbatim: providers such as Notion issue case-sensitive codes.
-  const body = text.trim();
-  const raw = String(item.code ?? "").trim();
-
-  // Notifications ("signed in on a new device") carry no code; never guess one.
-  if (/已在新设备|new device|signed in|登录提醒|security alert/i.test(subject)) return null;
-
-  // Prefer the visible body. A bare token on the first line is the common shape.
-  const firstLine = body.split(/\r?\n/, 1)[0]?.trim() ?? "";
-  if (/^[A-Za-z0-9]{4,10}$/.test(firstLine) && !looksLikeNoise(firstLine)) return firstLine;
-
-  const dashed = body.match(/(?<![A-Za-z0-9])([A-Za-z0-9]{3}-[A-Za-z0-9]{3})(?![A-Za-z0-9])/);
-  if (dashed) return dashed[1];
-
-  const digits = body.match(/(?<!\d)(\d{4,8})(?!\d)/);
-  if (digits && !looksLikeNoise(digits[1])) return digits[1];
-
-  // Fall back to the upstream field only when the body gave us nothing usable.
-  if (!body) return null;
-  if (looksLikeNoise(raw)) return null;
-  return /^[A-Za-z0-9-]{4,12}$/.test(raw) ? raw : null;
-}
-
-export function extractLink(item: IntakeMessage, html: string, text: string): string | null {
-  const bogus = /w3\.org|schemas?\.|\.dtd$|\.xsd$|www\.=/i;
-  const raw = String(item.link ?? "").trim();
-  if (/^https?:\/\//i.test(raw) && !bogus.test(raw)) return raw;
-  // Prefer links from the visible text body; fall back to href attributes.
-  const candidates = [
-    ...String(text).matchAll(/https?:\/\/[^\s"'<>]+/gi),
-    ...String(html).matchAll(/href=["'](https?:\/\/[^"']+)["']/gi),
-  ].map((m) =>
-    (m[1] ?? m[0])
-      .replace(/&amp;/g, "&")
-      .replace(/&#(\d+);/g, (_, n: string) => String.fromCharCode(Number(n)))
-      .replace(/&#x([0-9a-f]+);/gi, (_, n: string) => String.fromCharCode(parseInt(n, 16))),
-  );
-  return candidates.find((u) => !bogus.test(u)) ?? null;
+function usableLink(raw: string): string | null {
+  const value = raw.trim();
+  if (!/^https?:\/\//i.test(value) || LEGACY_BOGUS_LINK.test(value)) return null;
+  return value;
 }
 
 export function toLatest(item: IntakeMessage, mailbox: string): LatestMessage {
@@ -128,8 +154,8 @@ export function toLatest(item: IntakeMessage, mailbox: string): LatestMessage {
     subject: item.subject ?? "",
     receivedAt: item.received_at ?? "",
     text,
-    code: extractCode(item, text, item.subject ?? "") ?? undefined,
-    link: extractLink(item, html, text) ?? undefined,
+    code: usableCode(String(item.code ?? "")) ?? undefined,
+    link: usableLink(String(item.link ?? "")) ?? undefined,
   };
 }
 

@@ -10,6 +10,37 @@ function escapeHtml(v: string): string {
   return v.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] ?? c);
 }
 
+/**
+ * Error response for the public surface.
+ *
+ * Browsers get a readable page; API clients (format=json/csv, Accept: json) keep
+ * getting JSON. A visitor handed a dead link should never see a raw error object.
+ */
+function publicError(
+  c: { req: { query: (k: string) => string | undefined; header: (k: string) => string | undefined } },
+  status: 400 | 404,
+  code: string,
+  title: string,
+  detail: string,
+) {
+  const format = c.req.query("format");
+  const wantsJson =
+    format === "json" || format === "csv" || (c.req.header("accept") ?? "").includes("application/json");
+  if (wantsJson) return { json: { error: code }, status } as const;
+  return {
+    html: `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>${escapeHtml(title)}</title><style>
+*{box-sizing:border-box}body{margin:0;min-height:100dvh;display:grid;place-items:center;padding:24px;
+background:#fafafa;color:#18181b;font:15px/1.6 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
+.b{max-width:26rem;text-align:center}h1{margin:0 0 10px;font-size:19px;font-weight:650}
+p{margin:0;color:#71717a;font-size:14px}
+@media(prefers-color-scheme:dark){body{background:#09090b;color:#fafafa}p{color:#a1a1aa}}
+</style></head><body><div class="b"><h1>${escapeHtml(title)}</h1><p>${escapeHtml(detail)}</p></div></body></html>`,
+    status,
+  } as const;
+}
+
 function csv(mailbox: string, latest: LatestMessage | null): string {
   const cols = ["mailbox", "code", "subject", "from", "received_at"];
   const row = [mailbox, latest?.code ?? "", latest?.subject ?? "", latest?.from ?? "", latest?.receivedAt ?? ""];
@@ -33,10 +64,12 @@ main{width:100%;max-width:440px}
 .card{border:1px solid #e4e4e7;border-radius:12px;background:#fff;padding:26px 20px;text-align:center}
 .k{font-size:12px;color:#71717a;margin-bottom:10px}
 .code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:36px;font-weight:650;letter-spacing:.12em;line-height:1.1;word-break:break-all}
+.subj{font-size:17px;font-weight:600;line-height:1.35;word-break:break-word}
 .meta{margin-top:10px;font-size:12px;color:#a1a1aa}
+.hint{margin-top:14px;font-size:12px;color:#a1a1aa;line-height:1.5}
 .row{display:flex;gap:8px;margin-top:16px}
 button,a.btn{flex:1;display:inline-flex;align-items:center;justify-content:center;height:38px;padding:0 14px;border:1px solid #e4e4e7;border-radius:8px;background:#fff;color:#18181b;font:inherit;font-size:13px;font-weight:550;cursor:pointer;text-decoration:none}
-button.primary{background:#18181b;border-color:#18181b;color:#fff}
+button.primary,a.btn.primary{background:#18181b;border-color:#18181b;color:#fff}
 button:active{transform:scale(.98)}
 .empty{color:#a1a1aa;font-size:14px;padding:22px 0}
 .sec{margin-top:26px}
@@ -63,13 +96,13 @@ details.raw summary::before{content:'▸ ';color:#a1a1aa}
 @media(prefers-color-scheme:dark){pre.rawbody{background:#09090b;color:#a1a1aa}details.raw{border-color:#27272a}}
 details.raw[open] summary::before{content:'▾ '}
 pre.rawbody{margin:10px 0 0;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;line-height:1.6;white-space:pre-wrap;word-break:break-word;color:#3f3f46;background:#fafafa;border-radius:8px;padding:12px;max-height:320px;overflow:auto}
-@media(prefers-color-scheme:dark){body{background:#09090b;color:#fafafa}.card,.list,button,a.btn{background:#18181b;border-color:#27272a;color:#fafafa}.item{border-color:#27272a}.item-head:hover{background:#27272a}.body{color:#a1a1aa;border-color:#3f3f46}button.primary{background:#fafafa;color:#09090b;border-color:#fafafa}.pill{background:#27272a}.pill:hover{background:#3f3f46}}
+@media(prefers-color-scheme:dark){body{background:#09090b;color:#fafafa}.card,.list,button,a.btn{background:#18181b;border-color:#27272a;color:#fafafa}.item{border-color:#27272a}.item-head:hover{background:#27272a}.body{color:#a1a1aa;border-color:#3f3f46}button.primary,a.btn.primary{background:#fafafa;color:#09090b;border-color:#fafafa}.pill{background:#27272a}.pill:hover{background:#3f3f46}}
 </style></head>
 <body><main>
 <div class="addr" id="addr" title="点击复制">${escapeHtml(mailbox)}</div>
 <div class="card" id="card"><div class="empty">正在读取…</div></div>
 <div class="sec" id="hist-sec" hidden>
-  <div class="sec-t">历史验证码 <span id="hist-n"></span></div>
+  <div class="sec-t">更早的邮件 <span id="hist-n"></span></div>
   <div class="list" id="hist"></div>
 </div>
 <div class="foot" id="foot"></div>
@@ -88,12 +121,16 @@ function renderLatest(l){
   card.textContent='';
   if(!l){card.append(el('div','empty','还没有收到邮件'));return}
   card.append(el('div','k',l.code?'最新验证码':'最新邮件'));
-  card.append(el('div',l.code?'code':'',l.code||l.subject||'无主题'));
-  card.append(el('div','meta',[l.subject,when(l.receivedAt)].filter(Boolean).join(' · ')));
+  card.append(el('div',l.code?'code':'subj',l.code||l.subject||'无主题'));
+  // Avoid repeating the subject when it is already the headline.
+  const meta=[l.code?l.subject:'',when(l.receivedAt)].filter(Boolean).join(' · ');
+  card.append(el('div','meta',meta));
   const row=el('div','row');
   if(l.code){const b=el('button','primary','复制验证码');b.onclick=async()=>{b.textContent=await cp(l.code)?'已复制':'复制失败';setTimeout(()=>b.textContent='复制验证码',1400)};row.append(b)}
-  if(l.link){const a=el('a','btn','打开链接');a.href=l.link;a.target='_blank';a.rel='noopener';row.append(a)}
+  if(l.link){const a=el('a',l.code?'btn':'btn primary','打开链接');a.href=l.link;a.target='_blank';a.rel='noopener';row.append(a)}
   if(row.children.length)card.append(row);
+  // Say so when a message carries neither, instead of showing an empty card.
+  if(!l.code&&!l.link)card.append(el('div','hint','这封邮件没有验证码或登录链接，可展开原文查看。'));
   if(l.text){
     const wrap=el('details','raw');
     const sum=el('summary','','查看邮件原文');
@@ -145,9 +182,19 @@ document.getElementById('addr').onclick=()=>cp(MAILBOX);
 publicRoutes.get("/s/:id", async (c) => {
   const id = c.req.param("id");
   const format = c.req.query("format");
-  if (!isValidLinkId(id)) return c.json({ error: "not_found" }, 404);
+  const gone = () => {
+    const r = publicError(
+      c,
+      404,
+      "not_found",
+      "链接已失效",
+      "这个分享链接已被撤销或从未存在。请向分享给你的人索取一个新链接。",
+    );
+    return "json" in r ? c.json(r.json, r.status) : c.html(r.html, r.status);
+  };
+  if (!isValidLinkId(id)) return gone();
   const record = await store.getLink(c.env, id);
-  if (!record) return c.json({ error: "not_found" }, 404);
+  if (!record) return gone();
 
   if (format === "json" || format === "csv") {
     const items = await messagesByMailbox(c.env, record.mailbox, 20);
@@ -165,10 +212,22 @@ publicRoutes.get("/", async (c) => {
 
   const mailbox = normalizeMailbox(mail);
   const format = c.req.query("format");
-  if (!mailbox) return c.json({ error: "invalid_mailbox" }, 400);
+  if (!mailbox) {
+    const r = publicError(c, 400, "invalid_mailbox", "邮箱地址无效", "链接里的邮箱地址格式不对，请检查是否复制完整。");
+    return "json" in r ? c.json(r.json, r.status) : c.html(r.html, r.status);
+  }
 
   const record = await store.getMailbox(c.env, mailbox);
-  if (!record) return c.json({ error: "not_found" }, 404);
+  if (!record) {
+    const r = publicError(
+      c,
+      404,
+      "not_found",
+      "收件箱未开放",
+      "这个收件箱没有开放访问，或授权已被撤销。请向分享给你的人索取新链接。",
+    );
+    return "json" in r ? c.json(r.json, r.status) : c.html(r.html, r.status);
+  }
 
   if (format === "json" || format === "csv") {
     const items = await messagesByMailbox(c.env, mailbox, 20);

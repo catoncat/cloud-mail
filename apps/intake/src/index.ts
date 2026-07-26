@@ -97,6 +97,14 @@ export default {
       return deleteMessages(url, env);
     }
 
+    if (request.method === "POST" && url.pathname === "/admin/reindex") {
+      return reindexMessages(url, env);
+    }
+
+    if (request.method === "GET" && url.pathname === "/admin/stats") {
+      return messageStats(env);
+    }
+
     return text("Not found", 404);
   },
 
@@ -132,7 +140,9 @@ export default {
     const subject = parsed.subject ?? message.headers.get("subject") ?? "";
     const textBody = parsed.text ?? "";
     const htmlBody = parsed.html ?? "";
-    const searchable = [subject, textBody, stripHtml(htmlBody), raw].join("\n");
+    // Extract from decoded bodies only. The raw MIME source carries tracking ids,
+    // quoted-printable soft breaks, and xmlns URLs that masquerade as codes/links.
+    const readable = textBody.trim() || stripHtml(htmlBody);
     const now = new Date().toISOString();
     const id = crypto.randomUUID();
     const sender = normalizeEmail(parsed.from?.address ?? message.from);
@@ -162,8 +172,8 @@ export default {
       raw,
       textBody,
       htmlBody,
-      extractCode(searchable),
-      extractLink(searchable),
+      extractCode(readable, subject),
+      extractLink(readable, htmlBody),
       messageId,
       headersJson,
     ).run();
@@ -284,7 +294,13 @@ async function latestField(url: URL, env: Env, field: "code" | "link"): Promise<
      LIMIT 1`,
   ).bind(email).first<Record<string, string>>();
 
-  return json({ ok: true, item: row ?? null, [field]: row?.[field] ?? "" });
+  // Say so explicitly. Callers must be able to tell "no code in this mailbox"
+  // apart from success, otherwise an empty string reads as a valid answer.
+  if (!row) {
+    return json({ ok: false, error: `no_${field}_found`, item: null, [field]: "" }, 404);
+  }
+
+  return json({ ok: true, item: row, [field]: row[field] });
 }
 
 async function deleteMessages(url: URL, env: Env): Promise<Response> {
@@ -292,6 +308,90 @@ async function deleteMessages(url: URL, env: Env): Promise<Response> {
   if (!email) return json({ ok: false, error: "email_required" }, 400);
   const result = await env.DB.prepare("DELETE FROM messages WHERE recipient = ?1").bind(email).run();
   return json({ ok: true, changes: result.meta.changes ?? 0 });
+}
+
+/**
+ * Per-domain counters for dashboards.
+ *
+ * Aggregates in SQL so callers never download message bodies just to count them:
+ * fetching every row to compute totals does not survive real mail volume.
+ */
+async function messageStats(env: Env): Promise<Response> {
+  const now = new Date();
+  const dayStart = `${now.toISOString().slice(0, 10)}T00:00:00.000Z`;
+  const weekStart = new Date(now.getTime() - 7 * 86400_000).toISOString();
+
+  const result = await env.DB.prepare(
+    `SELECT domain,
+            COUNT(*) AS messages,
+            COUNT(DISTINCT recipient) AS mailboxes,
+            SUM(CASE WHEN code != '' THEN 1 ELSE 0 END) AS codes,
+            SUM(CASE WHEN code != '' AND received_at >= ?1 THEN 1 ELSE 0 END) AS codes_today,
+            SUM(CASE WHEN code != '' AND received_at >= ?2 THEN 1 ELSE 0 END) AS codes_week,
+            MAX(received_at) AS last_activity
+     FROM messages
+     GROUP BY domain`,
+  )
+    .bind(dayStart, weekStart)
+    .all<Record<string, string | number>>();
+
+  return json({ ok: true, items: result.results ?? [] });
+}
+
+/**
+ * Recompute code/link for stored messages using the current extractor.
+ *
+ * Needed because rows written before the extractor was fixed hold values scraped
+ * from raw MIME (tracking ids, CSS colours, truncated xmlns URLs). Runs the same
+ * code path as ingestion, so results cannot drift from live behaviour.
+ * Pass ?dry=1 to preview the changes without writing.
+ */
+async function reindexMessages(url: URL, env: Env): Promise<Response> {
+  const dry = url.searchParams.get("dry") === "1";
+  const requested = Number(url.searchParams.get("limit") ?? 500);
+  const limit = Number.isFinite(requested) ? Math.max(1, Math.min(1000, Math.trunc(requested))) : 500;
+  const email = normalizeEmail(url.searchParams.get("email") ?? "");
+
+  const rows = email
+    ? await env.DB.prepare(
+        "SELECT id, subject, text_body, html_body, code, link FROM messages WHERE recipient = ?1 ORDER BY received_at DESC LIMIT ?2",
+      )
+        .bind(email, limit)
+        .all<MessageRow>()
+    : await env.DB.prepare(
+        "SELECT id, subject, text_body, html_body, code, link FROM messages ORDER BY received_at DESC LIMIT ?1",
+      )
+        .bind(limit)
+        .all<MessageRow>();
+
+  const changed: Array<{ id: string; code: [string, string]; link: [string, string] }> = [];
+  const updates: D1PreparedStatement[] = [];
+
+  for (const row of rows.results ?? []) {
+    const subject = String(row.subject ?? "");
+    const html = String(row.html_body ?? "");
+    const readable = String(row.text_body ?? "").trim() || stripHtml(html);
+    const code = extractCode(readable, subject);
+    const link = extractLink(readable, html);
+    const oldCode = String(row.code ?? "");
+    const oldLink = String(row.link ?? "");
+    if (code === oldCode && link === oldLink) continue;
+
+    changed.push({ id: String(row.id), code: [oldCode, code], link: [oldLink, link] });
+    updates.push(
+      env.DB.prepare("UPDATE messages SET code = ?1, link = ?2 WHERE id = ?3").bind(code, link, row.id),
+    );
+  }
+
+  if (!dry && updates.length > 0) await env.DB.batch(updates);
+
+  return json({
+    ok: true,
+    dry,
+    scanned: (rows.results ?? []).length,
+    updated: dry ? 0 : changed.length,
+    changes: changed.slice(0, 50),
+  });
 }
 
 async function getDomain(domain: string, env: Env): Promise<DomainRow | null> {

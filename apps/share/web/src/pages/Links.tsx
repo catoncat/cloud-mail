@@ -36,7 +36,12 @@ export function Links({ apiKey, onToast }: { apiKey: string; onToast: (m: string
             </div>
             <Button size="sm" onClick={async () => onToast((await copyText(l.url)) ? "已复制" : "复制失败")}>复制</Button>
             <Button size="sm" variant="danger" disabled={revoke.isPending}
-              onClick={() => { if (confirm("撤销后对方无法再查看验证码。")) revoke.mutate(l.id); }}>撤销</Button>
+              onClick={() => {
+                // Name the target: several links often point at the same mailbox and
+                // only the label distinguishes them.
+                const target = l.label ? `${l.mailbox}（${l.label}）` : l.mailbox;
+                if (confirm(`撤销 ${target} 的分享链接？\n\n对方将立即无法再查看验证码，此操作不可恢复。`)) revoke.mutate(l.id);
+              }}>撤销</Button>
           </Row>
         ))}
       </Card>

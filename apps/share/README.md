@@ -52,12 +52,19 @@ The Worker reads mail with the intake `MAIL_ADMIN_TOKEN` on the server; that tok
 
 ## Install as PWA
 
-Open the share origin over HTTPS:
+The admin console installs as an app. Open the share origin over HTTPS:
 
 - Desktop Chrome/Edge: install from the address bar / app menu
 - iOS Safari: Share → Add to Home Screen
-- Endpoints: `/manifest.webmanifest`, `/sw.js`, `/icons/*`
-- Service worker caches shell only; live mail paths stay network-only
+- Endpoints: `/manifest.webmanifest`, `/icons/*`
+
+The manifest `start_url` is `/admin`, so the installed app opens the console and
+asks for the admin key. Public share links are meant to be opened as plain URLs
+rather than installed.
+
+There is deliberately **no offline caching**. `/sw.js` serves a self-unregistering
+worker that clears caches left by earlier versions: verification codes are
+short-lived and must never be served stale from a cache.
 
 ## Admin Page
 
