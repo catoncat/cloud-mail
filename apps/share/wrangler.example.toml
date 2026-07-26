@@ -1,3 +1,11 @@
+# Copy to wrangler.toml, or let `npm run setup` generate and fill it for you.
+#
+# Secrets are not stored here. Upload them with `wrangler secret put <NAME>`:
+#   ADMIN_KEY                operator console key (setup generates one)
+#   MAIL_INTAKE_ADMIN_TOKEN  intake's admin token, so this Worker can read mail
+#   CF_API_TOKEN             optional; lets the admin UI list zones / add domains
+#   SERVICE_TOKEN            optional; separate auth for the /api/v1 surface
+
 name = "cloud-mail-share"
 account_id = "REPLACE_WITH_ACCOUNT_ID"
 main = "src/index.ts"

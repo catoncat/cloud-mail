@@ -5,7 +5,7 @@ mailbox="${1:-}"
 if [[ -z "$mailbox" ]]; then
   echo "Usage: $0 name@domain.tld" >&2
   echo "  Creates a public ?mail= whitelist entry (any intake domain)." >&2
-  echo "For resale/share links that hide the admin origin, prefer:" >&2
+  echo "For share links that hide the admin origin, prefer:" >&2
   echo "  $0 --link name@domain.tld" >&2
   exit 2
 fi

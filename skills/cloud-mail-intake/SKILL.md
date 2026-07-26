@@ -116,7 +116,7 @@ cloud-mail api DELETE '/admin/messages?email=test@mailbox.example.com'
 
 ## Shareable code inbox (cloud-mail-share)
 
-Human UI for **passwordless re-login** and **resale code handoff**. Reads from intake (`INTAKE_ORIGIN`); never exposes intake `MAIL_ADMIN_TOKEN` to the browser.
+Human UI for **passwordless re-login** and **OTP handoff to another person**. Reads from intake (`INTAKE_ORIGIN`); never exposes intake `MAIL_ADMIN_TOKEN` to the browser.
 
 ### Hosts
 
@@ -152,7 +152,7 @@ https://inbox.example.com/?mail=name@mailbox.example.com
 https://inbox.example.com/?mail=name@mailbox.example.com&format=json
 ```
 
-2. **Opaque share `/s/<id>`** (preferred for selling / giving to others)
+2. **Opaque share `/s/<id>`** (preferred for giving access to others)
 
 ```text
 https://inbox.example.com/s/<random-link-id>
@@ -185,7 +185,7 @@ Do **not** print the key in commits, PR text, or public chat logs. Agents may re
 ### Create links
 
 ```bash
-# opaque share link (resale / buyer handoff) — preferred
+# opaque share link (handoff to another person) — preferred
 apps/share/scripts/allow-mailbox.sh --link name@mailbox.example.com
 
 # whitelist ?mail= URL (self use)
@@ -202,7 +202,7 @@ origin="https://inbox.example.com"
 curl -sS -X POST "$origin/admin/api/links" \
   -H "Authorization: Bearer ${admin_key}" \
   -H 'content-type: application/json' \
-  --data '{"mailbox":"name@mailbox.example.com","label":"sold-to-x"}'
+  --data '{"mailbox":"name@mailbox.example.com","label":"shared-with-alice"}'
 
 # whitelist mailbox
 curl -sS -X POST "$origin/admin/api/mailboxes" \

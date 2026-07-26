@@ -1,6 +1,6 @@
 # Cloud Mail Share
 
-Human-friendly **接码收件箱** on top of **cloud-mail-intake**. Reads mail from the intake
+Human-friendly shared OTP inbox on top of **cloud-mail-intake**. Reads mail from the intake
 Worker configured as `INTAKE_ORIGIN` in `wrangler.toml`.
 
 Serves whatever hosts `wrangler.toml` routes, for example `https://inbox.example.com`.
@@ -13,7 +13,7 @@ the mailbox itself can live on a different domain.
 Many passwordless signups only store an email. For:
 
 - your own re-login
-- handing a sold account to a buyer
+- handing an account over to a teammate or client
 
 you need a **shareable code inbox link** that auto-polls the latest OTP / magic link.
 
@@ -31,9 +31,9 @@ https://inbox.example.com/?mail=name@mailbox.example.com&format=csv
 
 Only works after the mailbox is added to the admin whitelist.
 
-### 2) Random share link (`/s/<id>`) — preferred for resale
+### 2) Random share link (`/s/<id>`) — preferred for handoff
 
-Opaque link; buyer does not need admin access:
+Opaque link; the recipient does not need admin access:
 
 ```text
 https://inbox.example.com/s/<random-link-id>
@@ -81,7 +81,7 @@ Whitelist `?mail=` URL:
 scripts/allow-mailbox.sh name@mailbox.example.com
 ```
 
-Create resale/share link:
+Create a share link:
 
 ```bash
 scripts/allow-mailbox.sh --link name@mailbox.example.com
@@ -96,8 +96,8 @@ origin="https://inbox.example.com"
 # whitelist
 curl -sS -X POST "$origin/admin/api/mailboxes"   -H "Authorization: Bearer ${admin_key}"   -H 'content-type: application/json'   --data '{"mailbox":"name@mailbox.example.com"}'
 
-# share link (recommended for selling)
-curl -sS -X POST "$origin/admin/api/links"   -H "Authorization: Bearer ${admin_key}"   -H 'content-type: application/json'   --data '{"mailbox":"name@mailbox.example.com","label":"sold-to-x"}'
+# share link (recommended for handing an inbox to someone else)
+curl -sS -X POST "$origin/admin/api/links"   -H "Authorization: Bearer ${admin_key}"   -H 'content-type: application/json'   --data '{"mailbox":"name@mailbox.example.com","label":"shared-with-alice"}'
 ```
 
 Response includes `url`, `jsonUrl`, `csvUrl`.
@@ -117,9 +117,27 @@ curl -sS -X DELETE "$origin/admin/api/links/<id>"   -H "Authorization: Bearer ${
 
 ## Deployment
 
-Copy `wrangler.example.toml` to `wrangler.toml` and fill in your account ID, routes,
-and KV namespace ID. Then:
+Deploy `apps/intake` first — this Worker reads mail through it.
 
 ```bash
-npm run deploy
+npm install
+npm run setup -- --host inbox.example.com
 ```
+
+`setup` creates the KV namespace, writes `wrangler.toml`, generates the admin key into
+`.secrets/share-admin.credentials`, uploads the required secrets, builds, and deploys.
+The intake origin and admin token are read from `../intake` automatically; override with
+`--intake-origin` and `MAIL_INTAKE_ADMIN_TOKEN` if intake lives elsewhere.
+
+Two secrets are optional and not uploaded by setup:
+
+| Secret | Enables |
+| --- | --- |
+| `CF_API_TOKEN` | admin UI lists Cloudflare zones and can add mail domains itself |
+| `SERVICE_TOKEN` | separate auth for the `/api/v1` automation surface |
+
+```bash
+npx wrangler secret put CF_API_TOKEN
+```
+
+Redeploy after code changes with `npm run deploy`.

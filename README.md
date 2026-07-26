@@ -9,7 +9,24 @@ Built for three audiences at once:
 | --- | --- | --- |
 | **Agent** | CLI + REST API + skill | `cloud-mail` CLI, `apps/intake` API |
 | **Operator** (you) | Admin PWA — domains, mailboxes, inbox, services | `https://inbox.example.com` |
-| **Consumer** (buyer / end user) | Single shareable OTP inbox link, no login | `https://inbox.example.com/s/<token>` |
+| **Recipient** (teammate / end user) | Single shareable OTP inbox link, no login | `https://inbox.example.com/s/<token>` |
+
+## What it's for
+
+Signup flows increasingly authenticate by emailing a code or a magic link. If the mailbox
+behind an account is a shared team resource, everyone who needs to sign in also needs to
+see that mail — without handing out mailbox credentials or admin access.
+
+Typical uses:
+
+- **Shared team accounts** — one SaaS subscription, several people who each need the login code
+- **CI / integration tests** — assert on a real verification email without a mail provider SDK
+- **Disposable addresses** — a fresh address per signup, on a domain you control
+- **Account handoff** — give someone a single link to one inbox, revocable, nothing else exposed
+- **Your own re-login** — read the code on your phone without an email client
+
+It receives and stores mail only. It cannot send, so it cannot be used to spoof or spam.
+Stored mail expires automatically (`RETENTION_HOURS`, default 6).
 
 ## Layout
 
@@ -28,16 +45,29 @@ Two Workers, one product. `intake` is the source of truth for domains and mail;
 
 ## Quick start
 
+Deploy intake first; share reads mail through it.
+
 ```bash
-cd apps/intake && npm install && node scripts/cli.mjs help   # agent / CLI path
-cd apps/share  && npm install && npm run dev                 # admin UI at :5173
+# 1. receive-only mail Worker
+cd apps/intake
+npm install
+cp config/domains.example.json config/domains.json   # list your domains
+node scripts/cli.mjs setup
+
+# 2. admin PWA + share links
+cd ../share
+npm install
+npm run setup -- --host inbox.example.com
 ```
 
-Deploy:
+Both setups are idempotent and need Cloudflare credentials in the environment
+(`CLOUDFLARE_API_TOKEN`, or `CLOUDFLARE_EMAIL` + `CLOUDFLARE_GLOBAL_API_KEY`).
+
+Local development and redeploys:
 
 ```bash
-cd apps/intake && npx wrangler deploy
-cd apps/share  && npm run deploy    # builds web/ into dist/ then deploys
+cd apps/share && npm run dev       # admin UI at :5173
+cd apps/share && npm run deploy    # builds web/ into dist/ then deploys
 ```
 
 ## Configuration
