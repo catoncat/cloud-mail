@@ -49,12 +49,12 @@ if [[ -z "$origin" ]]; then
 fi
 origin="${origin%/}"
 if [[ "$mode" == "link" ]]; then
-  curl -fsS -X POST "$origin/admin/links" \
+  curl -fsS -X POST "$origin/admin/api/links" \
     -H "Authorization: Bearer ${admin_key}" \
     -H "content-type: application/json" \
     --data "{\"mailbox\":\"${mailbox}\"}"
 else
-  curl -fsS -X POST "$origin/admin/mailboxes" \
+  curl -fsS -X POST "$origin/admin/api/mailboxes" \
     -H "Authorization: Bearer ${admin_key}" \
     -H "content-type: application/json" \
     --data "{\"mailbox\":\"${mailbox}\"}"

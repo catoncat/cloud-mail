@@ -199,23 +199,23 @@ admin_key="$(sed -n 's/^CLOUD_MAIL_SHARE_ADMIN_KEY=//p' apps/share/.secrets/shar
 origin="https://inbox.example.com"
 
 # create share link
-curl -sS -X POST "$origin/admin/links" \
+curl -sS -X POST "$origin/admin/api/links" \
   -H "Authorization: Bearer ${admin_key}" \
   -H 'content-type: application/json' \
   --data '{"mailbox":"name@mailbox.example.com","label":"sold-to-x"}'
 
 # whitelist mailbox
-curl -sS -X POST "$origin/admin/mailboxes" \
+curl -sS -X POST "$origin/admin/api/mailboxes" \
   -H "Authorization: Bearer ${admin_key}" \
   -H 'content-type: application/json' \
   --data '{"mailbox":"name@mailbox.example.com"}'
 
 # revoke share link
-curl -sS -X DELETE "$origin/admin/links/<id>" \
+curl -sS -X DELETE "$origin/admin/api/links/<id>" \
   -H "Authorization: Bearer ${admin_key}"
 
 # revoke whitelist
-curl -sS -X DELETE "$origin/admin/mailboxes?mail=name@mailbox.example.com" \
+curl -sS -X DELETE "$origin/admin/api/mailboxes/name@mailbox.example.com" \
   -H "Authorization: Bearer ${admin_key}"
 ```
 

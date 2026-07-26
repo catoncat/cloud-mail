@@ -94,10 +94,10 @@ admin_key="$(sed -n 's/^CLOUD_MAIL_SHARE_ADMIN_KEY=//p' .secrets/share-admin.cre
 origin="https://inbox.example.com"
 
 # whitelist
-curl -sS -X POST "$origin/admin/mailboxes"   -H "Authorization: Bearer ${admin_key}"   -H 'content-type: application/json'   --data '{"mailbox":"name@mailbox.example.com"}'
+curl -sS -X POST "$origin/admin/api/mailboxes"   -H "Authorization: Bearer ${admin_key}"   -H 'content-type: application/json'   --data '{"mailbox":"name@mailbox.example.com"}'
 
 # share link (recommended for selling)
-curl -sS -X POST "$origin/admin/links"   -H "Authorization: Bearer ${admin_key}"   -H 'content-type: application/json'   --data '{"mailbox":"name@mailbox.example.com","label":"sold-to-x"}'
+curl -sS -X POST "$origin/admin/api/links"   -H "Authorization: Bearer ${admin_key}"   -H 'content-type: application/json'   --data '{"mailbox":"name@mailbox.example.com","label":"sold-to-x"}'
 ```
 
 Response includes `url`, `jsonUrl`, `csvUrl`.
@@ -109,10 +109,10 @@ admin_key="$(sed -n 's/^CLOUD_MAIL_SHARE_ADMIN_KEY=//p' .secrets/share-admin.cre
 origin="https://inbox.example.com"
 
 # whitelist
-curl -sS -X DELETE "$origin/admin/mailboxes?mail=name@mailbox.example.com"   -H "Authorization: Bearer ${admin_key}"
+curl -sS -X DELETE "$origin/admin/api/mailboxes/name@mailbox.example.com"   -H "Authorization: Bearer ${admin_key}"
 
 # share link
-curl -sS -X DELETE "$origin/admin/links/<id>"   -H "Authorization: Bearer ${admin_key}"
+curl -sS -X DELETE "$origin/admin/api/links/<id>"   -H "Authorization: Bearer ${admin_key}"
 ```
 
 ## Deployment
