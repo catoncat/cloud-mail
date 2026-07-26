@@ -37,11 +37,19 @@ CREATE TABLE IF NOT EXISTS forwards (
   updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS maintenance_state (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_messages_recipient_received
   ON messages (recipient, received_at DESC);
 
 CREATE INDEX IF NOT EXISTS idx_messages_domain_received
   ON messages (domain, received_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_messages_received_at
+  ON messages (received_at);
 
 CREATE INDEX IF NOT EXISTS idx_messages_code
   ON messages (code);

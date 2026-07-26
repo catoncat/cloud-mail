@@ -16,7 +16,8 @@
     "head_sampling_rate": 1
   },
   "vars": {
-    "MAX_RAW_BYTES": "1048576"
+    "MAX_RAW_BYTES": "1048576",
+    "RETENTION_HOURS": "6"
   },
   "d1_databases": [
     {

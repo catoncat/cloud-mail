@@ -5,6 +5,7 @@ interface Env {
   DB: D1Database;
   MAIL_ADMIN_TOKEN: string;
   MAX_RAW_BYTES?: string;
+  RETENTION_HOURS?: string;
 }
 
 interface DomainRow {
@@ -44,6 +45,8 @@ interface ForwardRow {
 }
 
 const DEFAULT_MAX_RAW_BYTES = 1_048_576;
+const DEFAULT_RETENTION_HOURS = 6;
+const CLEANUP_INTERVAL_MS = 15 * 60 * 1000;
 const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 100;
 
@@ -116,6 +119,8 @@ export default {
       return;
     }
 
+    await maybeDeleteExpiredMessages(env);
+
     const maxBytes = parseMaxRawBytes(env);
     if (message.rawSize > maxBytes) {
       message.setReject("Message too large.");
@@ -164,6 +169,25 @@ export default {
     ).run();
   },
 } satisfies ExportedHandler<Env>;
+
+async function maybeDeleteExpiredMessages(env: Env): Promise<void> {
+  const now = Date.now();
+  const claimed = await env.DB.prepare(
+    `INSERT INTO maintenance_state (key, value)
+     VALUES ('last_message_cleanup', ?1)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value
+     WHERE CAST(maintenance_state.value AS INTEGER) <= ?2
+     RETURNING value`,
+  ).bind(String(now), String(now - CLEANUP_INTERVAL_MS)).first();
+  if (!claimed) return;
+
+  const configured = Number.parseInt(env.RETENTION_HOURS ?? "", 10);
+  const retentionHours = Number.isFinite(configured) && configured > 0
+    ? configured
+    : DEFAULT_RETENTION_HOURS;
+  const cutoff = new Date(now - retentionHours * 60 * 60 * 1000).toISOString();
+  await env.DB.prepare("DELETE FROM messages WHERE received_at < ?1").bind(cutoff).run();
+}
 
 async function listDomains(env: Env): Promise<Response> {
   const result = await env.DB.prepare("SELECT * FROM domains ORDER BY domain ASC").all<DomainRow>();

@@ -1,12 +1,9 @@
 #!/usr/bin/env node
 import { readFileSync } from "node:fs";
 import {
-  CLOUDFLARE_MX,
   cfFetch,
   loadConfig,
   resolveZone,
-  upsertDnsRecord,
-  warnConflictingMx,
 } from "./cf-api.mjs";
 
 const args = new Set(process.argv.slice(2));
@@ -73,21 +70,11 @@ async function configureDnsForDomain(zoneId, domain, zoneName, enabled) {
     return;
   }
 
-  await warnConflictingMx(zoneId, domain);
-  for (const mx of CLOUDFLARE_MX) {
-    await upsertDnsRecord(zoneId, {
-      type: "MX",
-      name: domain,
-      content: mx.content,
-      priority: mx.priority,
-    });
-  }
-  await upsertDnsRecord(zoneId, {
-    type: "TXT",
-    name: domain,
-    content: "v=spf1 include:_spf.mx.cloudflare.net ~all",
+  await cfFetch(`/zones/${zoneId}/email/routing/dns`, {
+    method: "POST",
+    body: JSON.stringify({ name: domain }),
   });
-  console.log(`[ok] MX records ensured for ${domain}`);
+  console.log(`[ok] email routing enabled for subdomain ${domain}`);
 }
 
 async function configureCatchAll(zoneId, workerName) {

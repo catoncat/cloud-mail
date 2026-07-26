@@ -114,6 +114,125 @@ cloud-mail api POST /admin/forwards --json '{"domain":"example.com","zone":"exam
 cloud-mail api DELETE '/admin/messages?email=test@mailbox.example.com'
 ```
 
+## Shareable code inbox (cloud-mail-share)
+
+Human UI for **passwordless re-login** and **resale code handoff**. Reads from intake (`INTAKE_ORIGIN`); never exposes intake `MAIL_ADMIN_TOKEN` to the browser.
+
+### Hosts
+
+The share Worker is deployed at whatever hosts `apps/share/wrangler.toml` routes,
+for example `https://inbox.example.com`. Additional hosts may exist as legacy aliases.
+
+Worker code: `apps/share`
+
+Any **intake-enabled** mailbox domain works. The share host is only the UI entry;
+the email can be on another domain.
+
+
+### Install as PWA (desktop / phone)
+
+Open the share origin over HTTPS.
+
+- **Desktop Chrome / Edge / Arc**: address bar install icon, or menu → “安装应用 / Install app”.
+- **iPhone / iPad Safari**: Share → **添加到主屏幕**.
+- **Android Chrome**: menu → **安装应用** / Add to Home screen.
+
+PWA endpoints:
+
+- `/manifest.webmanifest`
+- `/sw.js` (caches shell only; **never** caches `/s/*`, `?mail=`, `/api/*`, `/admin`)
+- `/icons/icon-192.png`, `/icons/icon-512.png`, `/icons/apple-touch-icon.png`
+
+### Two public link types
+
+1. **Whitelist `?mail=`** (address visible in URL; good for self use)
+
+```text
+https://inbox.example.com/?mail=name@mailbox.example.com
+https://inbox.example.com/?mail=name@mailbox.example.com&format=json
+```
+
+2. **Opaque share `/s/<id>`** (preferred for selling / giving to others)
+
+```text
+https://inbox.example.com/s/<random-link-id>
+https://inbox.example.com/s/<random-link-id>?format=json
+```
+
+Page polls latest mail every ~4s, shows large OTP, copy buttons, optional magic-link button.
+
+### Admin key (share UI, not intake)
+
+This is **different** from intake `MAIL_ADMIN_TOKEN`.
+
+| Item | Path / value source |
+| --- | --- |
+| Local credentials file | `apps/share/.secrets/share-admin.credentials` (gitignored) |
+| Env var name in file | `CLOUD_MAIL_SHARE_ADMIN_KEY=...` |
+| Override | `CLOUD_MAIL_SHARE_CREDENTIALS` |
+| Admin page | `<share-origin>/admin` |
+
+Show the key to the user (do not paste into git/docs):
+
+```bash
+sed -n 's/^CLOUD_MAIL_SHARE_ADMIN_KEY=//p' apps/share/.secrets/share-admin.credentials
+```
+
+Paste that value into the admin page auth box. File mode should stay `600`.
+
+Do **not** print the key in commits, PR text, or public chat logs. Agents may read the local file to call admin APIs.
+
+### Create links
+
+```bash
+# opaque share link (resale / buyer handoff) — preferred
+apps/share/scripts/allow-mailbox.sh --link name@mailbox.example.com
+
+# whitelist ?mail= URL (self use)
+apps/share/scripts/allow-mailbox.sh name@mailbox.example.com
+```
+
+API (admin key from credentials file):
+
+```bash
+admin_key="$(sed -n 's/^CLOUD_MAIL_SHARE_ADMIN_KEY=//p' apps/share/.secrets/share-admin.credentials)"
+origin="https://inbox.example.com"
+
+# create share link
+curl -sS -X POST "$origin/admin/links" \
+  -H "Authorization: Bearer ${admin_key}" \
+  -H 'content-type: application/json' \
+  --data '{"mailbox":"name@mailbox.example.com","label":"sold-to-x"}'
+
+# whitelist mailbox
+curl -sS -X POST "$origin/admin/mailboxes" \
+  -H "Authorization: Bearer ${admin_key}" \
+  -H 'content-type: application/json' \
+  --data '{"mailbox":"name@mailbox.example.com"}'
+
+# revoke share link
+curl -sS -X DELETE "$origin/admin/links/<id>" \
+  -H "Authorization: Bearer ${admin_key}"
+
+# revoke whitelist
+curl -sS -X DELETE "$origin/admin/mailboxes?mail=name@mailbox.example.com" \
+  -H "Authorization: Bearer ${admin_key}"
+```
+
+### Deploy share UI
+
+```bash
+cd apps/share
+npm run deploy
+```
+
+### Agent rules for share links
+
+- Prefer `/s/<id>` when the user will hand the inbox to another person.
+- Prefer `?mail=` only for the owner's own re-login convenience after whitelist.
+- After passwordless registration, create a share link and store `share_inbox_url` next to the account email.
+- Set the public origin with `CLOUD_MAIL_SHARE_ORIGIN`.
+
 ## Operational Checks
 
 After deployment or routing changes:

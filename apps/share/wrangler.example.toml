@@ -1,0 +1,30 @@
+name = "cloud-mail-share"
+account_id = "REPLACE_WITH_ACCOUNT_ID"
+main = "src/index.ts"
+compatibility_date = "2026-05-25"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = true
+preview_urls = false
+
+routes = [
+  { pattern = "inbox.example.com", custom_domain = true }
+]
+
+kv_namespaces = [
+  { binding = "SHARE_LINKS", id = "REPLACE_WITH_KV_NAMESPACE_ID" }
+]
+
+[assets]
+directory = "./dist"
+binding = "ASSETS"
+# Worker owns routing; assets are only served when the Worker asks for them.
+run_worker_first = true
+not_found_handling = "none"
+html_handling = "none"
+
+[vars]
+INTAKE_ORIGIN = "https://mail.example.com"
+
+[observability]
+enabled = true
+head_sampling_rate = 1
