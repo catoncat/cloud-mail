@@ -1,6 +1,15 @@
 import { Hono } from "hono";
+import { createAddress, AddressModelError, getAddressView, listAddressViews, updateAddress } from "../lib/addresses";
 import { domainStats, mailboxStats, overview } from "../lib/aggregate";
-import { listDomains, messagesByDomain, messagesByMailbox, toLatest, upsertIntakeDomain } from "../lib/intake";
+import {
+  deleteMailboxMessages,
+  listDomains,
+  messagesByDomain,
+  messagesByMailbox,
+  recentMessages,
+  toLatest,
+  upsertIntakeDomain,
+} from "../lib/intake";
 import { CloudflareError, findZone, getCatchAll, listZones } from "../lib/cloudflare";
 import * as store from "../lib/store";
 import type { Env } from "../lib/types";
@@ -40,6 +49,42 @@ api.get("/overview", async (c) => {
   const origin = new URL(c.req.url).origin;
   const links = await store.listLinks(c.env, origin);
   return c.json(await overview(c.env, origin, links.length));
+});
+
+api.get("/addresses", async (c) => {
+  const origin = new URL(c.req.url).origin;
+  return c.json({ addresses: await listAddressViews(c.env, origin) });
+});
+
+api.post("/addresses", async (c) => {
+  const input = await body<{ domain: string; localPart: string; label: string; service: string; note: string }>(c);
+  try {
+    return c.json(await createAddress(c.env, new URL(c.req.url).origin, input), 201);
+  } catch (error) {
+    return addressError(c, error);
+  }
+});
+
+api.patch("/addresses/:mailbox", async (c) => {
+  const input = await body<{ label: string; service: string; note: string }>(c);
+  try {
+    await updateAddress(c.env, c.req.param("mailbox"), input);
+    const origin = new URL(c.req.url).origin;
+    const address = await getAddressView(c.env, origin, c.req.param("mailbox"));
+    return address ? c.json(address) : c.json({ error: "address_not_found" }, 404);
+  } catch (error) {
+    return addressError(c, error);
+  }
+});
+
+api.delete("/addresses/:mailbox/messages", async (c) => {
+  const mailbox = normalizeMailbox(c.req.param("mailbox"));
+  if (!mailbox) return c.json({ error: "invalid_mailbox" }, 400);
+  try {
+    return c.json({ ok: true, changes: await deleteMailboxMessages(c.env, mailbox) });
+  } catch (error) {
+    return c.json({ error: error instanceof Error ? error.message : "intake_delete_failed" }, 502);
+  }
 });
 
 api.get("/domains", async (c) => c.json({ domains: await domainStats(c.env) }));
@@ -162,14 +207,7 @@ api.get("/mailboxes/:mailbox/latest", async (c) => {
   return c.json({ mailbox, latest: item ? toLatest(item, mailbox) : null });
 });
 
-api.get("/usage", async (c) => {
-  const [services, domains, recent] = await Promise.all([
-    store.serviceUsage(c.env),
-    store.domainUsage(c.env),
-    store.listClaims(c.env, 30),
-  ]);
-  return c.json({ services, domains, recent });
-});
+api.get("/usage", async (c) => c.json(await store.usageSnapshot(c.env, 30)));
 
 /** Flat, paginated message feed across all domains. */
 api.get("/messages", async (c) => {
@@ -184,9 +222,7 @@ api.get("/messages", async (c) => {
   } else if (domain) {
     items = await messagesByDomain(c.env, domain, 500);
   } else {
-    const domains = (await listDomains(c.env)).filter((d) => d.enabled);
-    const all = await Promise.all(domains.map((d) => messagesByDomain(c.env, d.domain, 200).catch(() => [])));
-    items = all.flat();
+    items = await recentMessages(c.env, 100);
   }
 
   items.sort((a, b) => String(b.received_at ?? "").localeCompare(String(a.received_at ?? "")));
@@ -204,6 +240,14 @@ api.get("/messages", async (c) => {
     })),
   });
 });
+
+function addressError(
+  c: { json: (body: { error: string }, status: 400 | 404 | 409 | 503) => Response },
+  error: unknown,
+): Response {
+  if (error instanceof AddressModelError) return c.json({ error: error.code }, error.status);
+  return c.json({ error: "address_operation_failed" }, 503);
+}
 
 api.get("/links", async (c) => {
   const origin = new URL(c.req.url).origin;
@@ -229,16 +273,13 @@ api.delete("/links/:id", async (c) => {
 
 api.get("/mailboxes", async (c) => {
   const origin = new URL(c.req.url).origin;
-  const { keys } = await c.env.SHARE_LINKS.list({ prefix: "mailbox:", limit: 1000 });
-  const items = await Promise.all(
-    keys.map(async (k) => {
-      const mailbox = normalizeMailbox(k.name.slice("mailbox:".length));
-      if (!mailbox) return null;
-      const rec = await store.getMailbox(c.env, mailbox);
-      return rec ? { ...rec, url: `${origin}/?mail=${encodeURIComponent(mailbox)}` } : null;
-    }),
-  );
-  return c.json({ mailboxes: items.filter(Boolean) });
+  const records = await store.listPublicMailboxRecords(c.env);
+  return c.json({
+    mailboxes: records.map((rec) => ({
+      ...rec,
+      url: `${origin}/?mail=${encodeURIComponent(rec.mailbox)}`,
+    })),
+  });
 });
 
 api.post("/mailboxes", async (c) => {

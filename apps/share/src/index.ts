@@ -8,7 +8,7 @@ import type { Env } from "./lib/types";
 const app = new Hono<{ Bindings: Env }>();
 
 app.use("/api/v1/*", cors({ origin: "*", allowHeaders: ["authorization", "content-type", "x-service-token"], allowMethods: ["GET", "POST", "OPTIONS"] }));
-app.use("/admin/api/*", cors({ origin: "*", allowHeaders: ["authorization", "content-type", "x-admin-key"], allowMethods: ["GET", "POST", "DELETE", "OPTIONS"] }));
+app.use("/admin/api/*", cors({ origin: "*", allowHeaders: ["authorization", "content-type", "x-admin-key"], allowMethods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"] }));
 
 app.use("*", async (c, next) => {
   await next();
@@ -41,9 +41,9 @@ app.get("/manifest.webmanifest", (c) =>
   c.json(
     {
       id: "/admin",
-      name: "邮箱控制台",
-      short_name: "控制台",
-      description: "域名与邮箱验证码管理",
+      name: "Cloud Mail 收码台",
+      short_name: "收码台",
+      description: "创建地址，实时接收验证码与登录链接",
       start_url: "/admin",
       scope: "/",
       display: "standalone",

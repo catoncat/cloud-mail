@@ -1,4 +1,4 @@
-import type { Env, IntakeMessage, LatestMessage } from "./types";
+import type { Env, IntakeMessage, LatestMessage, MailboxSummary } from "./types";
 
 function origin(env: Env): string {
   const u = new URL(env.INTAKE_ORIGIN);
@@ -33,6 +33,46 @@ export async function listDomains(env: Env): Promise<Array<{ domain: string; ena
 export async function messagesByDomain(env: Env, domain: string, limit = 500): Promise<IntakeMessage[]> {
   const data = await call<{ items?: IntakeMessage[] }>(env, "/admin/messages", { domain, limit: String(limit) });
   return data?.items ?? [];
+}
+
+export async function recentMessages(env: Env, limit = 50): Promise<IntakeMessage[]> {
+  const data = await call<{ items?: IntakeMessage[] }>(env, "/admin/recent-messages", { limit: String(limit) });
+  return data?.items ?? [];
+}
+
+export async function mailboxSummaries(env: Env, limit = 1000): Promise<MailboxSummary[]> {
+  const data = await call<{
+    items?: Array<{
+      recipient?: string;
+      domain?: string;
+      local_part?: string;
+      messages?: number;
+      codes?: number;
+      last_activity?: string;
+      last_code?: string;
+      last_code_at?: string;
+      latest_sender?: string;
+      latest_subject?: string;
+    }>;
+  }>(env, "/admin/mailboxes", { limit: String(limit) });
+
+  return (data?.items ?? []).flatMap((row) => {
+    const mailbox = String(row.recipient ?? "").toLowerCase();
+    const domain = String(row.domain ?? "").toLowerCase();
+    if (!mailbox || !domain) return [];
+    return [{
+      mailbox,
+      localPart: String(row.local_part ?? mailbox.split("@")[0] ?? ""),
+      domain,
+      messages: Number(row.messages ?? 0),
+      codes: Number(row.codes ?? 0),
+      lastActivity: row.last_activity || null,
+      lastCode: row.last_code || null,
+      lastCodeAt: row.last_code_at || null,
+      latestSender: String(row.latest_sender ?? ""),
+      latestSubject: String(row.latest_subject ?? ""),
+    } satisfies MailboxSummary];
+  });
 }
 
 export interface DomainCounters {
@@ -84,6 +124,18 @@ export async function domainCounters(env: Env): Promise<Map<string, DomainCounte
 export async function messagesByMailbox(env: Env, email: string, limit = 1): Promise<IntakeMessage[]> {
   const data = await call<{ items?: IntakeMessage[] }>(env, "/admin/messages", { email, limit: String(limit) });
   return data?.items ?? [];
+}
+
+export async function deleteMailboxMessages(env: Env, email: string): Promise<number> {
+  const url = new URL("/admin/messages", origin(env));
+  url.searchParams.set("email", email);
+  const res = await fetch(url.toString(), {
+    method: "DELETE",
+    headers: { accept: "application/json", authorization: `Bearer ${env.MAIL_INTAKE_ADMIN_TOKEN}` },
+  });
+  if (!res.ok) throw new Error(`intake_delete_failed_${res.status}`);
+  const data = await res.json<{ changes?: number }>();
+  return Number(data.changes ?? 0);
 }
 
 const SERVICES: Array<[RegExp, string]> = [

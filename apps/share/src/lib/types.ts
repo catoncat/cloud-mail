@@ -12,6 +12,14 @@ export interface Env {
 export type DomainPurpose = "automation" | "manual" | "reserved";
 
 export type LinkRecord = { mailbox: string; label?: string; createdAt: string };
+export type AddressRecord = {
+  mailbox: string;
+  label?: string;
+  service?: string;
+  note?: string;
+  createdAt: string;
+  updatedAt: string;
+};
 export type DomainMeta = { domain: string; purpose: DomainPurpose; note?: string; updatedAt: string };
 
 export type IntakeMessage = {
@@ -45,6 +53,45 @@ export type DomainStat = {
   messages: number;
   codes: number;
   lastActivity: string | null;
+};
+
+export type MailboxSummary = {
+  mailbox: string;
+  localPart: string;
+  domain: string;
+  messages: number;
+  codes: number;
+  lastActivity: string | null;
+  lastCode: string | null;
+  lastCodeAt: string | null;
+  latestSender: string;
+  latestSubject: string;
+};
+
+export type AddressView = {
+  mailbox: string;
+  localPart: string;
+  domain: string;
+  label?: string;
+  service: string | null;
+  note?: string;
+  createdAt: string | null;
+  updatedAt: string | null;
+  registered: boolean;
+  publicAccess: boolean;
+  messages: number;
+  codes: number;
+  lastActivity: string | null;
+  lastCode: string | null;
+  lastCodeAt: string | null;
+  latestSender: string;
+  latestSubject: string;
+  shares: LinkView[];
+};
+
+export type AddressDetail = {
+  address: AddressView;
+  messages: LatestMessage[];
 };
 
 export type MailboxStat = {

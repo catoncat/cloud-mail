@@ -1,4 +1,4 @@
-import type { DomainHealth, DomainStat, LinkView, MailboxStat, MessageFeed, Overview, UsageReport, Zone } from "./types";
+import type { AddressView, DomainHealth, DomainStat, LinkView, MailboxStat, MessageFeed, Overview, UsageReport, Zone } from "./types";
 
 const KEY_STORAGE = "mailAdminKey";
 
@@ -32,6 +32,13 @@ async function request<T>(path: string, key: string, init?: RequestInit): Promis
 export const api = {
   verify: (key: string) => request<Overview>("/overview", key),
   overview: (key: string) => request<Overview>("/overview", key),
+  addresses: (key: string) => request<{ addresses: AddressView[] }>("/addresses", key),
+  createAddress: (key: string, input: { domain?: string; localPart?: string; label?: string; service?: string; note?: string }) =>
+    request<AddressView>("/addresses", key, { method: "POST", body: JSON.stringify(input) }),
+  updateAddress: (key: string, mailbox: string, input: { label?: string; service?: string; note?: string }) =>
+    request<AddressView>(`/addresses/${encodeURIComponent(mailbox)}`, key, { method: "PATCH", body: JSON.stringify(input) }),
+  clearAddressMessages: (key: string, mailbox: string) =>
+    request<{ ok: boolean; changes: number }>(`/addresses/${encodeURIComponent(mailbox)}/messages`, key, { method: "DELETE" }),
   domains: (key: string) => request<{ domains: DomainStat[] }>("/domains", key),
   mailboxes: (key: string, domain: string) =>
     request<{ mailboxes: MailboxStat[] }>(`/domains/${encodeURIComponent(domain)}/mailboxes`, key),
@@ -52,4 +59,11 @@ export const api = {
   createLink: (key: string, mailbox: string, label?: string) =>
     request<LinkView>("/links", key, { method: "POST", body: JSON.stringify({ mailbox, label }) }),
   deleteLink: (key: string, id: string) => request<{ ok: boolean }>(`/links/${id}`, key, { method: "DELETE" }),
+  allowMailbox: (key: string, mailbox: string, label?: string) =>
+    request<{ created: Array<{ mailbox: string; url: string }> }>("/mailboxes", key, {
+      method: "POST",
+      body: JSON.stringify({ mailbox, label }),
+    }),
+  revokeMailbox: (key: string, mailbox: string) =>
+    request<{ ok: boolean; mailbox: string }>(`/mailboxes/${encodeURIComponent(mailbox)}`, key, { method: "DELETE" }),
 };

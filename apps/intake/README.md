@@ -100,6 +100,9 @@ Raw Worker API access is also available:
 ```bash
 cloud-mail api GET /admin/domains
 cloud-mail api GET /admin/forwards
+cloud-mail api GET '/admin/messages?email=test@mailbox.example.com&limit=10'
+cloud-mail api GET '/admin/recent-messages?limit=20'
+cloud-mail api GET '/admin/mailboxes?limit=500'
 cloud-mail api POST /admin/domains --json '{"domain":"x.example.com","zone":"example.com","enabled":true}'
 cloud-mail api POST /admin/forwards --json '{"domain":"example.com","zone":"example.com","destination":"you@gmail.com","enabled":true}'
 ```

@@ -2,6 +2,7 @@ import type { DomainPurpose } from "./types";
 
 const MAILBOX_RE = /^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$/i;
 const DOMAIN_RE = /^[a-z0-9.-]+\.[a-z]{2,}$/;
+const LOCAL_PART_RE = /^[a-z0-9](?:[a-z0-9._-]{0,38}[a-z0-9])?$/;
 const LINK_ID_RE = /^[A-Za-z0-9_-]{12,96}$/;
 
 export function normalizeMailbox(value: unknown): string {
@@ -12,6 +13,11 @@ export function normalizeMailbox(value: unknown): string {
 export function normalizeDomain(value: unknown): string {
   const v = String(value ?? "").trim().toLowerCase().replace(/^@/, "");
   return DOMAIN_RE.test(v) ? v : "";
+}
+
+export function normalizeLocalPart(value: unknown): string {
+  const v = String(value ?? "").trim().toLowerCase();
+  return LOCAL_PART_RE.test(v) ? v : "";
 }
 
 export function normalizePurpose(value: unknown): DomainPurpose {

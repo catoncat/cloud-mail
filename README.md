@@ -25,6 +25,17 @@ Typical uses:
 - **Account handoff** — give someone a single link to one inbox, revocable, nothing else exposed
 - **Your own re-login** — read the code on your phone without an email client
 
+## Console workflow
+
+The admin PWA is organized around the address used for an account, not the storage tables behind it:
+
+1. Create an address for a service. It is copied immediately and starts listening for mail.
+2. Paste it into the signup or login flow. The next code or magic link appears in the live view.
+3. Keep the address as an account identity with a label, note, history, and access grants.
+4. Share or revoke that address from its detail page. Domain routing and agent usage stay under System.
+
+Created addresses are private metadata. They do not become publicly readable until the operator explicitly creates an opaque share link or enables the stable `?mail=` entry.
+
 It receives and stores mail only. It cannot send, so it cannot be used to spoof or spam.
 Stored mail expires automatically (`RETENTION_HOURS`, default 6).
 

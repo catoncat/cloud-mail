@@ -45,6 +45,27 @@ export type MailboxStat = {
 
 export type LinkView = LinkRecord & { id: string; url: string; jsonUrl: string };
 
+export type AddressView = {
+  mailbox: string;
+  localPart: string;
+  domain: string;
+  label?: string;
+  service: string | null;
+  note?: string;
+  createdAt: string | null;
+  updatedAt: string | null;
+  registered: boolean;
+  publicAccess: boolean;
+  messages: number;
+  codes: number;
+  lastActivity: string | null;
+  lastCode: string | null;
+  lastCodeAt: string | null;
+  latestSender: string;
+  latestSubject: string;
+  shares: LinkView[];
+};
+
 export type Overview = {
   mailboxesTotal: number;
   codesToday: number;

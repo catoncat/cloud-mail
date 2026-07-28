@@ -107,6 +107,8 @@ Prefer CLI wrappers. If a one-off endpoint is needed:
 cloud-mail api GET /admin/domains
 cloud-mail api GET /admin/forwards
 cloud-mail api GET '/admin/messages?email=test@mailbox.example.com&limit=10'
+cloud-mail api GET '/admin/recent-messages?limit=20'
+cloud-mail api GET '/admin/mailboxes?limit=500'
 cloud-mail api GET '/admin/latest-code?email=test@mailbox.example.com'
 cloud-mail api GET '/admin/latest-link?email=test@mailbox.example.com'
 cloud-mail api POST /admin/domains --json '{"domain":"x.example.com","zone":"example.com","enabled":true}'
@@ -162,6 +164,25 @@ https://inbox.example.com/s/<random-link-id>?format=json
 ```
 
 Page polls latest mail every ~4s, shows large OTP, copy buttons, optional magic-link button.
+
+### Admin console workflow
+
+The admin PWA is address-first:
+
+1. Create an address for the target service. The UI copies it and starts a live watch.
+2. Use it in the signup/login flow, then copy the arriving code or open the magic link.
+3. Manage the address label, note, history, share links, and stable self-access from one detail view.
+
+Creating an address stores private identity metadata only. It does not expose the inbox until an opaque share link is created or the stable `?mail=` grant is enabled.
+
+Admin endpoints:
+
+```text
+GET    /admin/api/addresses
+POST   /admin/api/addresses
+PATCH  /admin/api/addresses/:mailbox
+DELETE /admin/api/addresses/:mailbox/messages
+```
 
 ### Admin key (share UI, not intake)
 

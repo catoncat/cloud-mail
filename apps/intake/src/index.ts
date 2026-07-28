@@ -35,6 +35,19 @@ interface MessageRow {
   headers_json: string;
 }
 
+interface MailboxSummaryRow {
+  recipient: string;
+  domain: string;
+  local_part: string;
+  messages: number;
+  codes: number;
+  last_activity: string;
+  last_code: string;
+  last_code_at: string;
+  latest_sender: string;
+  latest_subject: string;
+}
+
 interface ForwardRow {
   domain: string;
   zone: string;
@@ -83,6 +96,14 @@ export default {
 
     if (request.method === "GET" && url.pathname === "/admin/messages") {
       return listMessages(url, env);
+    }
+
+    if (request.method === "GET" && url.pathname === "/admin/recent-messages") {
+      return listRecentMessages(url, env);
+    }
+
+    if (request.method === "GET" && url.pathname === "/admin/mailboxes") {
+      return listMailboxes(url, env);
     }
 
     if (request.method === "GET" && url.pathname === "/admin/latest-code") {
@@ -282,6 +303,66 @@ async function listMessages(url: URL, env: Env): Promise<Response> {
   return json({ ok: false, error: "email_or_domain_required" }, 400);
 }
 
+async function listRecentMessages(url: URL, env: Env): Promise<Response> {
+  const limit = clampLimit(url.searchParams.get("limit"));
+  const result = await env.DB.prepare(
+    `SELECT ${messageProjection()} FROM messages
+     ORDER BY received_at DESC
+     LIMIT ?1`,
+  ).bind(limit).all<MessageRow>();
+  return json({ ok: true, items: result.results ?? [] });
+}
+
+/**
+ * One compact row per observed recipient.
+ *
+ * The human console treats an address as the durable object. Keep this
+ * aggregation next to D1 so callers never download every message body and
+ * rebuild the same address book themselves.
+ */
+async function listMailboxes(url: URL, env: Env): Promise<Response> {
+  const limit = clampLimit(url.searchParams.get("limit"), 1000);
+  const result = await env.DB.prepare(
+    `WITH ranked AS (
+       SELECT id,
+              recipient,
+              domain,
+              local_part,
+              sender,
+              subject,
+              received_at,
+              code,
+              ROW_NUMBER() OVER (
+                PARTITION BY recipient
+                ORDER BY received_at DESC, id DESC
+              ) AS latest_rank,
+              ROW_NUMBER() OVER (
+                PARTITION BY recipient
+                ORDER BY CASE WHEN code != '' THEN 0 ELSE 1 END,
+                         received_at DESC,
+                         id DESC
+              ) AS code_rank
+       FROM messages
+     )
+     SELECT recipient,
+            domain,
+            local_part,
+            COUNT(*) AS messages,
+            SUM(CASE WHEN code != '' THEN 1 ELSE 0 END) AS codes,
+            MAX(received_at) AS last_activity,
+            MAX(CASE WHEN code_rank = 1 AND code != '' THEN code ELSE '' END) AS last_code,
+            MAX(CASE WHEN code_rank = 1 AND code != '' THEN received_at ELSE '' END) AS last_code_at,
+            MAX(CASE WHEN latest_rank = 1 THEN sender ELSE '' END) AS latest_sender,
+            MAX(CASE WHEN latest_rank = 1 THEN subject ELSE '' END) AS latest_subject
+     FROM ranked
+     GROUP BY recipient, domain, local_part
+     ORDER BY last_activity DESC
+     LIMIT ?1`,
+  ).bind(limit).all<MailboxSummaryRow>();
+
+  return json({ ok: true, items: result.results ?? [] });
+}
+
 async function latestField(url: URL, env: Env, field: "code" | "link"): Promise<Response> {
   const email = normalizeEmail(url.searchParams.get("email") ?? "");
   if (!email) return json({ ok: false, error: "email_required" }, 400);
@@ -457,10 +538,10 @@ function normalizeDomain(domain: string): string {
   return String(domain).trim().toLowerCase().replace(/^@/u, "");
 }
 
-function clampLimit(input: string | null): number {
+function clampLimit(input: string | null, max = MAX_LIMIT): number {
   const value = Number(input ?? DEFAULT_LIMIT);
   if (!Number.isFinite(value)) return DEFAULT_LIMIT;
-  return Math.max(1, Math.min(MAX_LIMIT, Math.trunc(value)));
+  return Math.max(1, Math.min(max, Math.trunc(value)));
 }
 
 function parseMaxRawBytes(env: Env): number {

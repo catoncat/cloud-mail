@@ -174,7 +174,7 @@ async function tick(){
     foot.textContent='更新于 '+new Date().toLocaleTimeString();
   }catch(e){foot.textContent='刷新失败：'+e.message}
 }
-tick();setInterval(tick,4000);
+tick();setInterval(tick,8000);
 document.getElementById('addr').onclick=()=>cp(MAILBOX);
 </script></body></html>`;
 }

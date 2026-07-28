@@ -46,7 +46,7 @@ Create with admin API or:
 scripts/allow-mailbox.sh --link name@mailbox.example.com
 ```
 
-The page shows the full mailbox, large OTP, copy buttons, optional magic-link button, and polls every 4 seconds.
+The page shows the full mailbox, large OTP, copy buttons, optional magic-link button, and polls every 8 seconds.
 
 The Worker reads mail with the intake `MAIL_ADMIN_TOKEN` on the server; that token is never exposed to the browser.
 
@@ -72,7 +72,24 @@ short-lived and must never be served stale from a cache.
 https://inbox.example.com/admin
 ```
 
-Paste the admin key from the local credentials file, then add / list / copy / revoke whitelisted mailboxes. Batch paste is supported (one per line / commas / whitespace).
+The console has three task-oriented views:
+
+- **Live** — create and copy an address, then watch the next code or magic link arrive.
+- **Addresses** — search account identities, edit service/notes, inspect history, and manage access.
+- **System** — configure receiving domains, check routing, and inspect automation usage.
+
+Minted addresses are stored under separate private metadata keys. Creating one does **not** whitelist it for public access. Stable `?mail=` access and opaque `/s/<id>` links remain explicit grants.
+
+Address endpoints (admin auth required):
+
+```text
+GET    /admin/api/addresses
+POST   /admin/api/addresses
+PATCH  /admin/api/addresses/:mailbox
+DELETE /admin/api/addresses/:mailbox/messages
+```
+
+The existing `/admin/api/mailboxes` and `/admin/api/links` interfaces remain available for scripts and integrations.
 
 ## Allow A Mailbox
 
