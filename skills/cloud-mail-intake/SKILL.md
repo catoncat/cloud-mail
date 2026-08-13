@@ -1,6 +1,7 @@
 ---
 name: cloud-mail-intake
 description: Use this skill whenever the user wants to deploy, configure, operate, or query a receive-only Cloudflare Email Routing Worker for one or more domains, including apex domains, subdomains, mailbox catch-all, inbound mail smoke tests, reading verification codes or magic links, adding domains, or automating mail setup/API usage quickly.
+disable-model-invocation: true
 ---
 
 # Cloud Mail Intake
