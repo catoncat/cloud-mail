@@ -25,7 +25,7 @@ const BOGUS_LINK = /\b(?:w3\.org|schemas?[-.]|purl\.org|\.dtd\b|\.xsd\b)/iu;
 const SOFT_BREAK_TRUNCATED = /[./=]=$|^https?:\/\/[^/]*=$/u;
 
 /** Repeated digits and CSS greys: #333333, 000000, 111111 ... */
-const NOISE_TOKEN = /^(?:(\d)\1{3,}|(?:[0-9a-f])\1{5}|000000|ffffff|333333|666666|999999|cccccc|eeeeee)$/iu;
+const NOISE_TOKEN = /^(?:(\d)\1{3,}|([0-9a-f])\2{5}|000000|ffffff|333333|666666|999999|cccccc|eeeeee)$/iu;
 
 function isNoise(token: string): boolean {
   if (!token) return true;
