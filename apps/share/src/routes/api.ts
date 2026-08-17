@@ -10,7 +10,7 @@ import {
   toLatest,
   upsertIntakeDomain,
 } from "../lib/intake";
-import { CloudflareError, findZone, getCatchAll, listZones } from "../lib/cloudflare";
+import { CloudflareError, enableEmailRouting, findZone, getCatchAll, listZones, setCatchAll } from "../lib/cloudflare";
 import * as store from "../lib/store";
 import type { Env } from "../lib/types";
 import { createLinkId, isValidLinkId, normalizeDomain, normalizeMailbox, splitMailboxes } from "../lib/validate";
@@ -101,11 +101,16 @@ api.get("/zones", async (c) => {
 });
 
 /**
- * Register a mail domain in the intake allowlist.
+ * Register a mail domain in the intake allowlist and configure Email Routing.
  *
- * DNS + catch-all still require the account-owner credential, which is
- * intentionally not stored in this Worker. We verify current state and tell
- * the operator exactly what is missing.
+ * When `CF_API_TOKEN` is available:
+ * 1. Find the Cloudflare zone that owns the domain.
+ * 2. Enable Email Routing DNS records for the domain.
+ * 3. Point the zone catch-all at the intake Worker (idempotent PUT).
+ * 4. Register the domain in the intake allowlist.
+ *
+ * When `CF_API_TOKEN` is absent, steps 2-3 are skipped and the response includes
+ * a `followUp.command` the operator can run locally to finish the job.
  */
 api.post("/domains", async (c) => {
   const input = await body<{ domain: string }>(c);
@@ -124,15 +129,32 @@ api.post("/domains", async (c) => {
     zoneName = zone.name;
     checks.push({ step: "zone", ok: true, detail: zone.name });
 
-    const catchAll = await getCatchAll(c.env, zone.id);
-    dnsReady = catchAll?.enabled === true && catchAll.target === "cloud-mail-intake";
-    checks.push({
-      step: "catch_all",
-      ok: dnsReady,
-      detail: catchAll ? `${catchAll.enabled ? "enabled" : "disabled"} -> ${catchAll.target || "none"}` : "not_configured",
-    });
+    // Step 2: Enable Email Routing DNS
+    try {
+      await enableEmailRouting(c.env, zone, domain);
+      checks.push({ step: "email_routing_dns", ok: true });
+    } catch (err) {
+      // Some zones already have routing enabled — a 4xx here is not fatal.
+      const detail = err instanceof Error ? err.message : "unknown";
+      checks.push({ step: "email_routing_dns", ok: false, detail });
+    }
+
+    // Step 3: Set catch-all → intake Worker
+    try {
+      await setCatchAll(c.env, zone);
+      dnsReady = true;
+      checks.push({ step: "catch_all", ok: true, detail: "enabled -> cloud-mail-intake" });
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : "unknown";
+      checks.push({ step: "catch_all", ok: false, detail });
+      // Still check current state — maybe it was already set.
+      const catchAll = await getCatchAll(c.env, zone.id);
+      dnsReady = catchAll?.enabled === true && catchAll.target === "cloud-mail-intake";
+    }
   } catch (err) {
-    checks.push({ step: "zone", ok: false, detail: err instanceof Error ? err.message : "cloudflare_error" });
+    // CF_API_TOKEN missing → graceful degradation.
+    const detail = err instanceof Error ? err.message : "cloudflare_error";
+    checks.push({ step: "zone", ok: false, detail });
   }
 
   try {
@@ -153,7 +175,7 @@ api.post("/domains", async (c) => {
       followUp: dnsReady
         ? null
         : {
-            reason: "Email Routing DNS 需要账号级凭据，Worker 不持有",
+            reason: "自动配置未完成 — 可能缺少 CF_API_TOKEN 或权限不足",
             command: "cd apps/intake && cloud-mail setup",
           },
     },
