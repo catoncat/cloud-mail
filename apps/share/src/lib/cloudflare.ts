@@ -38,25 +38,6 @@ export async function findZone(env: Env, domain: string): Promise<Zone | null> {
     .sort((a, b) => b.name.length - a.name.length)[0] ?? null;
 }
 
-/** Enable Email Routing DNS for an apex or subdomain. */
-export async function enableEmailRouting(env: Env, zone: Zone, domain: string): Promise<void> {
-  const body = domain === zone.name ? {} : { name: domain };
-  await cf(env, `/zones/${zone.id}/email/routing/dns`, { method: "POST", body: JSON.stringify(body) });
-}
-
-/** Point the zone catch-all at the intake Worker. */
-export async function setCatchAll(env: Env, zone: Zone, workerName = "cloud-mail-intake"): Promise<void> {
-  await cf(env, `/zones/${zone.id}/email/routing/rules/catch_all`, {
-    method: "PUT",
-    body: JSON.stringify({
-      name: `cloud-mail-intake catch-all -> ${workerName}`,
-      enabled: true,
-      matchers: [{ type: "all" }],
-      actions: [{ type: "worker", value: [workerName] }],
-    }),
-  });
-}
-
 export async function getCatchAll(env: Env, zoneId: string): Promise<{ enabled: boolean; target: string } | null> {
   try {
     const r = await cf<{ enabled?: boolean; actions?: Array<{ type: string; value: string[] }> }>(

@@ -1,7 +1,4 @@
-export type DomainPurpose = "automation" | "manual" | "reserved";
-
 export type LinkRecord = { mailbox: string; label?: string; createdAt: string };
-export type DomainMeta = { domain: string; purpose: DomainPurpose; note?: string; updatedAt: string };
 
 export type LatestMessage = {
   id: string | null;
@@ -29,18 +26,6 @@ export type DomainHealth = {
   zone?: string;
   status: "routed" | "unrouted" | "unknown";
   detail?: string;
-};
-
-export type MailboxStat = {
-  mailbox: string;
-  localPart: string;
-  domain: string;
-  messages: number;
-  lastCode: string | null;
-  lastActivity: string | null;
-  service: string | null;
-  shared: boolean;
-  shareUrl?: string;
 };
 
 export type LinkView = LinkRecord & { id: string; url: string; jsonUrl: string };
@@ -75,12 +60,6 @@ export type Overview = {
   domainsWithMail: number;
   domainsConfigured: number;
   topDomains: DomainStat[];
-};
-
-export type MailboxHistory = {
-  mailbox: string;
-  latest: LatestMessage | null;
-  messages: LatestMessage[];
 };
 
 export type FeedMessage = LatestMessage & { domain: string };
