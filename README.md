@@ -37,7 +37,7 @@ The admin PWA is organized around the address used for an account, not the stora
 Created addresses are private metadata. They do not become publicly readable until the operator explicitly creates an opaque share link or enables the stable `?mail=` entry.
 
 It receives and stores mail only. It cannot send, so it cannot be used to spoof or spam.
-Stored mail expires automatically (`RETENTION_HOURS`, default 6).
+Stored mail expires automatically (`RETENTION_HOURS`, default 6), swept by a cron trigger so the window holds even for domains that have stopped receiving mail.
 
 ## Layout
 

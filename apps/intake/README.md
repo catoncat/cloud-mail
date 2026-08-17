@@ -111,8 +111,38 @@ cloud-mail api POST /admin/forwards --json '{"domain":"example.com","zone":"exam
 
 This repo includes a generic Codex skill template at `skills/cloud-mail-intake/SKILL.md`. Local operators can copy/adapt it into `$CODEX_HOME/skills/cloud-mail-intake/SKILL.md` or their personal skills directory and set the repo path/API host for their machine.
 
+## Schema changes
+
+`migrations/` holds numbered SQL files that `cloud-mail setup` replays in filename
+order. Every file is idempotent, so setup is safe to re-run and a database created
+before this directory existed converges to the same schema. See
+`migrations/README.md` before adding one.
+
+## Retention
+
+Stored mail expires after `RETENTION_HOURS` (default 6). Two things drive the sweep:
+
+- the **cron trigger** in `wrangler.example.jsonc` (`*/15 * * * *`), which is what
+  makes the guarantee hold for domains that have stopped receiving mail;
+- an opportunistic sweep on the ingestion path, throttled to once every 15 minutes.
+
+Deployments whose `wrangler.jsonc` predates the cron trigger keep the ingestion-path
+sweep only, which means **mail in an idle domain never expires**. Copy the `triggers`
+block into your local `wrangler.jsonc` and redeploy.
+
+## Rate limiting
+
+`/admin/*` is capped by the optional `ADMIN_RATE_LIMIT` binding (100 requests per
+minute per client IP, checked before the token so it bounds token guessing). The
+Worker runs fine without the binding — it simply does not rate limit. Copy the
+`ratelimits` block from `wrangler.example.jsonc` to enable it.
+
+`namespace_id` must be a positive integer unique within your Cloudflare account; change it if `1001` is already used by another Worker.
+
 ## Notes
 
 - This project only receives and stores mail. It does not send mail.
 - Unknown recipient domains are rejected by the Worker.
 - Catch-all routing is configured per Cloudflare zone, then the Worker allowlist decides which full domains are accepted.
+- If `MAIL_ADMIN_TOKEN` is not uploaded, `/admin/*` returns `503 admin_token_not_configured` rather than accepting requests.
+- Redelivered mail is deduplicated on `(recipient, message_id)`, so a retry cannot produce a second copy of the same one-time code.

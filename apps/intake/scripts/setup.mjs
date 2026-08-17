@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
-import { execFileSync, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { loadConfig, run } from "./cf-api.mjs";
 
 const args = new Set(process.argv.slice(2));
@@ -16,7 +16,7 @@ ensureAdminToken();
 await ensureDependencies();
 const databaseId = ensureD1Database(config.database_name, config.database_id);
 updateWrangler(config, databaseId);
-run("npx", ["wrangler", "d1", "execute", config.database_name, "--remote", "--file", "migrations/schema.sql"]);
+applyMigrations(config.database_name);
 seedConfiguredDomains(config);
 seedConfiguredForwards(config);
 putSecret("MAIL_ADMIN_TOKEN", readFileSync(".secrets/mail-admin-token.txt", "utf8").trim());
@@ -56,6 +56,28 @@ async function ensureDependencies() {
   run("npm", ["install"]);
 }
 
+/**
+ * Replays every migration in filename order.
+ *
+ * There is no ledger of applied migrations on purpose: databases created before
+ * this directory existed have no such ledger to read, and inventing one would make
+ * them look unmigrated. Instead every migration is written to be idempotent, so a
+ * full replay converges to the same schema from any starting point. See
+ * migrations/README.md.
+ */
+function applyMigrations(databaseName) {
+  const files = readdirSync("migrations")
+    .filter((file) => /^\d+_.*\.sql$/u.test(file))
+    .sort();
+
+  if (files.length === 0) throw new Error("No migrations found in migrations/");
+
+  for (const file of files) {
+    run("npx", ["wrangler", "d1", "execute", databaseName, "--remote", "--file", `migrations/${file}`]);
+    console.log(`[ok] migration applied: ${file}`);
+  }
+}
+
 function ensureD1Database(name, configuredId) {
   const listRaw = run("npx", ["wrangler", "d1", "list", "--json"]);
   const list = JSON.parse(listRaw);
@@ -81,12 +103,20 @@ function ensureD1Database(name, configuredId) {
 
 function updateWrangler(currentConfig, databaseId) {
   let text = readFileSync("wrangler.jsonc", "utf8");
-  text = text.replace(/"name":\s*"[^"]+"/u, `"name": "${currentConfig.worker_name}"`);
+  // Anchored to the top-level key at its own indentation. A bare /"name":/ would
+  // also match nested bindings such as ratelimits[].name and rewrite the wrong one.
+  text = replaceTopLevel(text, "name", currentConfig.worker_name);
   text = text.replace(/"pattern":\s*"[^"]+"/u, `"pattern": "${currentConfig.api_host}"`);
   text = text.replace(/"database_name":\s*"[^"]+"/u, `"database_name": "${currentConfig.database_name}"`);
   text = text.replace(/"database_id":\s*"[^"]+"/u, `"database_id": "${databaseId}"`);
   writeFileSync("wrangler.jsonc", text);
   console.log("[ok] wrangler.jsonc updated");
+}
+
+function replaceTopLevel(text, key, value) {
+  const pattern = new RegExp(`^(\\s{0,2}"${key}":\\s*)"[^"]*"`, "mu");
+  if (!pattern.test(text)) throw new Error(`Could not find top-level "${key}" in wrangler.jsonc`);
+  return text.replace(pattern, `$1"${value}"`);
 }
 
 function seedConfiguredDomains(currentConfig) {
