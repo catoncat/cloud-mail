@@ -4,12 +4,9 @@ export interface Env {
   ADMIN_KEY?: string;
   SERVICE_TOKEN?: string;
   CF_API_TOKEN?: string;
-  INTAKE_ADMIN_TOKEN?: string;
   SHARE_LINKS: KVNamespace;
   ASSETS: Fetcher;
 }
-
-export type DomainPurpose = "automation" | "manual" | "reserved";
 
 export type LinkRecord = { mailbox: string; label?: string; createdAt: string };
 export type AddressRecord = {
@@ -20,8 +17,6 @@ export type AddressRecord = {
   createdAt: string;
   updatedAt: string;
 };
-export type DomainMeta = { domain: string; purpose: DomainPurpose; note?: string; updatedAt: string };
-
 export type IntakeMessage = {
   id?: string;
   domain?: string;
@@ -89,11 +84,6 @@ export type AddressView = {
   shares: LinkView[];
 };
 
-export type AddressDetail = {
-  address: AddressView;
-  messages: LatestMessage[];
-};
-
 export type MailboxStat = {
   mailbox: string;
   localPart: string;
@@ -117,12 +107,6 @@ export type Overview = {
   domainsWithMail: number;
   domainsConfigured: number;
   topDomains: DomainStat[];
-};
-
-export type MailboxHistory = {
-  mailbox: string;
-  latest: LatestMessage | null;
-  messages: LatestMessage[];
 };
 
 export type ClaimRecord = {

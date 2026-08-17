@@ -1,10 +1,9 @@
-import type { AddressRecord, ClaimRecord, DomainMeta, DomainUsage, Env, LinkRecord, LinkView, ServiceUsage } from "./types";
-import { normalizeDomain, normalizeMailbox, normalizePurpose } from "./validate";
+import type { AddressRecord, ClaimRecord, DomainUsage, Env, LinkRecord, LinkView, ServiceUsage } from "./types";
+import { normalizeDomain, normalizeMailbox } from "./validate";
 
 const LINK = "link:";
 const MAILBOX = "mailbox:";
 const ADDRESS = "address:";
-const DOMAIN_META = "domainmeta:";
 
 /** Single-key indexes. Read paths must not list() the free-tier KV namespace. */
 const IDX_LINKS = "idx:links";
@@ -276,23 +275,6 @@ export async function shareUrlByMailbox(env: Env, origin: string): Promise<Map<s
   return map;
 }
 
-export async function getDomainMeta(env: Env, domain: string): Promise<DomainMeta | null> {
-  const raw = await env.SHARE_LINKS.get(DOMAIN_META + domain);
-  if (!raw) return null;
-  try {
-    const parsed = JSON.parse(raw) as DomainMeta;
-    return { ...parsed, domain, purpose: normalizePurpose(parsed.purpose) };
-  } catch {
-    return null;
-  }
-}
-
-export async function putDomainMeta(env: Env, meta: DomainMeta): Promise<void> {
-  const domain = normalizeDomain(meta.domain);
-  if (!domain) return;
-  await env.SHARE_LINKS.put(DOMAIN_META + domain, JSON.stringify({ ...meta, domain }));
-}
-
 function byNewest(a: { createdAt?: string; mailbox: string }, b: { createdAt?: string; mailbox: string }): number {
   const ta = Date.parse(a.createdAt || "");
   const tb = Date.parse(b.createdAt || "");
@@ -330,10 +312,6 @@ export async function listClaims(env: Env, limit = 50): Promise<ClaimRecord[]> {
 
 async function allStats(env: Env): Promise<StatRow[]> {
   return Object.values(await loadStatsIndex(env));
-}
-
-export async function serviceUsage(env: Env): Promise<ServiceUsage[]> {
-  return serviceUsageFrom(await allStats(env));
 }
 
 export async function domainUsage(env: Env): Promise<DomainUsage[]> {
