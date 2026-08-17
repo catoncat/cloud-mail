@@ -76,7 +76,7 @@ const CLEANUP_INTERVAL_MS = 15 * 60 * 1000;
 const CLEANUP_BATCH_SIZE = 500;
 const CLEANUP_MAX_BATCHES = 20;
 const DEFAULT_LIMIT = 20;
-const MAX_LIMIT = 100;
+const MAX_LIMIT = 500;
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
