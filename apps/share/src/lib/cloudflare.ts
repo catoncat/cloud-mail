@@ -50,3 +50,32 @@ export async function getCatchAll(env: Env, zoneId: string): Promise<{ enabled: 
     return null;
   }
 }
+
+/**
+ * Enable Email Routing DNS for an apex or subdomain.
+ *
+ * For an apex domain the body is empty (Cloudflare infers the records).
+ * For a subdomain, `name` tells Cloudflare which subdomain to route.
+ */
+export async function enableEmailRouting(env: Env, zone: Zone, domain: string): Promise<void> {
+  const body = domain === zone.name ? {} : { name: domain };
+  await cf(env, `/zones/${zone.id}/email/routing/dns`, { method: "POST", body: JSON.stringify(body) });
+}
+
+/**
+ * Point the zone catch-all at the intake Worker.
+ *
+ * This overwrites any existing catch-all rule. If the zone already routes to
+ * the correct Worker, calling this is idempotent (Cloudflare replaces in place).
+ */
+export async function setCatchAll(env: Env, zone: Zone, workerName = "cloud-mail-intake"): Promise<void> {
+  await cf(env, `/zones/${zone.id}/email/routing/rules/catch_all`, {
+    method: "PUT",
+    body: JSON.stringify({
+      name: `cloud-mail-intake catch-all -> ${workerName}`,
+      enabled: true,
+      matchers: [{ type: "all" }],
+      actions: [{ type: "worker", value: [workerName] }],
+    }),
+  });
+}

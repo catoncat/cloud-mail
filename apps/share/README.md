@@ -78,10 +78,15 @@ The console has three task-oriented views:
 - **Addresses** — search account identities, edit service/notes, inspect history, and manage access.
 - **System** — register receiving domains, check routing, and inspect automation usage.
 
-Adding a domain from the System view registers it in the intake allowlist and reports
-whether the zone's catch-all already points at the intake Worker. It does **not**
-create Email Routing DNS records. When the catch-all is missing, the UI hands back the
-`cd apps/intake && cloud-mail setup` command to finish the job.
+Adding a domain from the System view:
+1. Finds the Cloudflare zone that owns the domain.
+2. Enables Email Routing DNS records (creates the required MX + verification TXT).
+3. Points the zone's catch-all rule at the `cloud-mail-intake` Worker.
+4. Registers the domain in the intake allowlist.
+
+Steps 2–3 require `CF_API_TOKEN`. Without it, the response includes a `followUp.command`
+(`cd apps/intake && cloud-mail setup`) and the domain is still registered in the
+allowlist so it starts accepting mail as soon as DNS is configured externally.
 
 Minted addresses are stored under separate private metadata keys. Creating one does **not** whitelist it for public access. Stable `?mail=` access and opaque `/s/<id>` links remain explicit grants.
 
@@ -163,7 +168,7 @@ Two secrets are optional and not uploaded by setup:
 
 | Secret | Enables |
 | --- | --- |
-| `CF_API_TOKEN` | admin UI lists Cloudflare zones, checks catch-all status, and registers a domain in the intake allowlist |
+| `CF_API_TOKEN` | admin UI automatically configures Email Routing DNS and catch-all when adding a domain; without it, the domain is only registered in the intake allowlist and you must run `cloud-mail setup` to finish |
 | `SERVICE_TOKEN` | separate auth for the `/api/v1` automation surface |
 
 ```bash
