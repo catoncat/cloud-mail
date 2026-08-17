@@ -92,3 +92,45 @@ test("returns empty rather than guessing", () => {
   assert.equal(extractCode("Thanks for signing up. Welcome aboard!"), "");
   assert.equal(extractLink(""), "");
 });
+
+// --- multilingual code extraction ---
+
+test("extracts traditional Chinese labelled code", () => {
+  assert.equal(extractCode("您的驗證碼為 482901，請勿洩露給他人"), "482901");
+});
+
+test("extracts Japanese labelled code", () => {
+  assert.equal(extractCode("認証コード: 738291 を入力してください"), "738291");
+});
+
+test("extracts Korean labelled code", () => {
+  assert.equal(extractCode("인증 코드: 591047을 입력하세요"), "591047");
+});
+
+test("extracts French labelled code", () => {
+  assert.equal(extractCode("Votre code de vérification est 294015"), "294015");
+});
+
+test("extracts Spanish labelled code", () => {
+  assert.equal(extractCode("Tu código de verificación es 847201"), "847201");
+});
+
+test("extracts German labelled code", () => {
+  assert.equal(extractCode("Ihr Bestätigungscode lautet 583920"), "583920");
+});
+
+test("extracts Russian labelled code", () => {
+  assert.equal(extractCode("Ваш код подтверждения 629104"), "629104");
+});
+
+test("extracts Portuguese labelled code", () => {
+  assert.equal(extractCode("Seu código de verificação é 371058"), "371058");
+});
+
+test("notification subject blocks code in Japanese", () => {
+  assert.equal(extractCode("新しいデバイスからのログイン 123456", "新しいデバイスでログイン"), "");
+});
+
+test("notification subject blocks code in Korean", () => {
+  assert.equal(extractCode("새 기기에서 로그인됨 654321", "새 기기 로그인"), "");
+});

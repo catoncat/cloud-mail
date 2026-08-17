@@ -13,7 +13,7 @@
 
 /** Subjects that announce an event rather than carrying a credential. */
 const NOTIFICATION_SUBJECT =
-  /已在新设备|新设备上登录|登录提醒|安全提醒|new (?:device|sign[- ]?in)|signed in|security alert|password (?:was )?changed/iu;
+  /已在新设备|新设备上登录|登录提醒|安全提醒|新裝置|新設備|登入提醒|new (?:device|sign[- ]?in)|signed in|security alert|password (?:was )?changed|nouveau (?:périphérique|appareil)|nueva sesión|neues Gerät|新しいデバイス|새\s*기기|새\s*로그인/iu;
 
 /** Namespace and schema URLs only ever appear in markup, never as a destination. */
 const BOGUS_LINK = /\b(?:w3\.org|schemas?[-.]|purl\.org|\.dtd\b|\.xsd\b)/iu;
@@ -51,9 +51,25 @@ export function extractCode(body: string, subject = ""): string {
   if (/^[A-Za-z0-9]{4,10}$/u.test(firstLine) && !isNoise(firstLine)) return firstLine;
 
   const labelled = [
+    // English labels
     /(?:verification|security|login|sign[-\s]?in|one[-\s]?time|confirmation|auth(?:orization)?|signup|access)\s+code\s*(?:is|:|：|=|-)?\s*([A-Za-z0-9]{4,10})\b/u,
     /\bcode\s*(?:is|:|：|=)\s*([A-Za-z0-9]{4,10})\b/u,
+    // Chinese (simplified)
     /(?:验证码|验证代码|安全码|登录代码|确认代码|注册码|一次性代码)[^A-Za-z0-9]{0,20}([A-Za-z0-9]{4,10})\b/u,
+    // Chinese (traditional)
+    /(?:驗證碼|驗證代碼|安全碼|登入代碼|確認代碼|註冊碼|一次性代碼)[^A-Za-z0-9]{0,20}([A-Za-z0-9]{4,10})\b/u,
+    // Japanese
+    /(?:認証コード|確認コード|ログインコード|セキュリティコード|ワンタイムコード|検証コード)[^A-Za-z0-9]{0,20}([A-Za-z0-9]{4,10})\b/u,
+    // Korean
+    /(?:인증\s*코드|인증\s*번호|확인\s*코드|보안\s*코드|로그인\s*코드|일회용\s*코드)[^A-Za-z0-9]{0,20}([A-Za-z0-9]{4,10})\b/u,
+    // French
+    /(?:code\s+de\s+v[ée]rification|code\s+de\s+confirmation|code\s+de\s+s[ée]curit[ée]|code\s+d['']acc[eè]s)\s*(?:est|:|\s)\s*([A-Za-z0-9]{4,10})\b/iu,
+    // Spanish / Portuguese
+    /(?:c[oó]digo\s+de\s+verificaci[oó]n|c[oó]digo\s+de\s+confirmaci[oó]n|c[oó]digo\s+de\s+seguridad|c[oó]digo\s+de\s+acesso|c[oó]digo\s+de\s+verifica[çc][ãa]o)\s*(?:es|[eé]|:|\s)\s*([A-Za-z0-9]{4,10})\b/iu,
+    // German
+    /(?:Best[äa]tigungscode|Sicherheitscode|Verifizierungscode|Anmeldecode|Zugangscode)\s*(?:lautet|ist|:|\s)\s*([A-Za-z0-9]{4,10})\b/iu,
+    // Russian
+    /(?:код\s+подтверждения|код\s+верификации|код\s+безопасности|код\s+входа|одноразовый\s+код)[^A-Za-z0-9]{0,20}([A-Za-z0-9]{4,10})\b/iu,
   ];
 
   for (const pattern of labelled) {
