@@ -164,7 +164,7 @@ https://inbox.example.com/s/<random-link-id>
 https://inbox.example.com/s/<random-link-id>?format=json
 ```
 
-Page polls latest mail every ~4s, shows large OTP, copy buttons, optional magic-link button.
+Page polls latest mail every 8s, shows large OTP, copy buttons, optional magic-link button.
 
 ### Admin console workflow
 
