@@ -1,0 +1,148 @@
+# cloud-mail-intake
+
+Receive-only Cloudflare Email Routing Worker for many domains.
+
+One Worker handles every configured domain, whether the mailbox domain is an apex domain such as `example.com` or a subdomain such as `mailbox.example.com`.
+
+## CLI
+
+Run all operations through the project CLI:
+
+```bash
+cloud-mail help
+```
+
+When the global wrapper is not installed, use:
+
+```bash
+node scripts/cli.mjs help
+```
+
+## Configure
+
+Create local config, then add any apex or subdomain mailbox domain:
+
+```bash
+cp config/domains.example.json config/domains.json
+cp wrangler.example.jsonc wrangler.jsonc
+cloud-mail config set --api-host mail.example.com --worker-name cloud-mail-intake
+cloud-mail config add --domain mailbox.example.com --zone example.com
+cloud-mail config add --domain example.net --zone example.net
+cloud-mail config add-forward --domain example.com --zone example.com --destination you@gmail.com
+cloud-mail config show
+```
+
+This writes `config/domains.json`:
+
+```json
+{
+  "api_host": "mail.example.com",
+  "worker_name": "cloud-mail-intake",
+  "database_name": "cloud-mail-intake",
+  "database_id": "",
+  "domains": [
+    {
+      "domain": "mailbox.example.com",
+      "zone": "example.com",
+      "enabled": true,
+      "configure_dns": true
+    }
+  ],
+  "forwards": [
+    {
+      "domain": "example.com",
+      "zone": "example.com",
+      "destination": "you@gmail.com",
+      "enabled": true,
+      "configure_dns": true
+    }
+  ]
+}
+```
+
+For additional domains, add another entry. `zone` is the Cloudflare zone that owns the DNS records. If omitted, setup tries to find it by suffix.
+
+Use `forwards` for domains that should keep forwarding to a verified destination address instead of being stored in D1. This is useful when one Cloudflare zone has both an apex domain that should forward to Gmail and a subdomain that should be stored by the Worker.
+
+If the Cloudflare account cannot create more D1 databases, set `database_name` and `database_id` to an existing empty D1 database. Do not delete existing D1 databases from this setup script.
+
+## Deploy
+
+Use Cloudflare credentials that can manage Workers, D1, DNS, and Email Routing for the target zones:
+
+```bash
+cloud-mail setup
+```
+
+`setup` seeds configured domains directly into D1 before routing setup, so first deploy does not depend on the public API host already resolving.
+
+If you manage Cloudflare credentials through a wrapper, run setup through that wrapper:
+
+```bash
+your-cloudflare-env-wrapper cloud-mail setup
+```
+
+## Query
+
+The setup script writes the admin token to `.secrets/mail-admin-token.txt` and uploads it as the Worker secret `MAIL_ADMIN_TOKEN`.
+
+```bash
+cloud-mail domains list
+cloud-mail forwards list
+cloud-mail messages --email test@mailbox.example.com
+cloud-mail latest-code --email test@mailbox.example.com
+cloud-mail latest-link --email test@mailbox.example.com
+cloud-mail clear --email test@mailbox.example.com
+```
+
+Raw Worker API access is also available:
+
+```bash
+cloud-mail api GET /admin/domains
+cloud-mail api GET /admin/forwards
+cloud-mail api GET '/admin/messages?email=test@mailbox.example.com&limit=10'
+cloud-mail api GET '/admin/recent-messages?limit=20'
+cloud-mail api GET '/admin/mailboxes?limit=500'
+cloud-mail api POST /admin/domains --json '{"domain":"x.example.com","zone":"example.com","enabled":true}'
+cloud-mail api POST /admin/forwards --json '{"domain":"example.com","zone":"example.com","destination":"you@gmail.com","enabled":true}'
+```
+
+## Agent Skill
+
+`skills/cloud-mail-intake/SKILL.md` teaches a coding agent to operate this project through the CLI. `npm run install:global` installs the CLI to `~/bin/cloud-mail` and copies the skill to `~/.codex/skills/cloud-mail-intake/`; copy it into any other agent's skills directory the same way.
+
+## Schema changes
+
+`migrations/` holds numbered SQL files that `cloud-mail setup` replays in filename
+order. Every file is idempotent, so setup is safe to re-run and a database created
+before this directory existed converges to the same schema. See
+`migrations/README.md` before adding one.
+
+## Retention
+
+Stored mail expires after `RETENTION_HOURS` (default 6). Two things drive the sweep:
+
+- the **cron trigger** in `wrangler.example.jsonc` (`*/15 * * * *`), which is what
+  makes the guarantee hold for domains that have stopped receiving mail;
+- an opportunistic sweep on the ingestion path, throttled to once every 15 minutes.
+
+Deployments whose `wrangler.jsonc` predates the cron trigger keep the ingestion-path
+sweep only, which means **mail in an idle domain never expires**. Copy the `triggers`
+block into your local `wrangler.jsonc` and redeploy.
+
+## Rate limiting
+
+`/admin/*` is capped by the optional `ADMIN_RATE_LIMIT` binding (100 requests per
+minute per client IP, checked before the token so it bounds token guessing). The
+Worker runs fine without the binding — it simply does not rate limit. Copy the
+`ratelimits` block from `wrangler.example.jsonc` to enable it.
+
+`namespace_id` must be a positive integer unique within your Cloudflare account; change it if `1001` is already used by another Worker.
+
+## Notes
+
+- This project only receives and stores mail. It does not send mail.
+- Unknown recipient domains are rejected by the Worker.
+- Catch-all routing is configured per Cloudflare zone, then the Worker allowlist decides which full domains are accepted.
+- If `MAIL_ADMIN_TOKEN` is not uploaded, `/admin/*` returns `503 admin_token_not_configured` rather than accepting requests.
+- Redelivered mail is deduplicated on `(recipient, message_id)`, so a retry cannot produce a second copy of the same one-time code.
