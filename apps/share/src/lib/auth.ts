@@ -28,7 +28,7 @@ export async function secretMatches(provided: string, expected: string): Promise
  * Fails closed with 503 when the secret is unset, so a missing deploy step reads
  * as misconfiguration rather than as a wrong key.
  */
-export function requireSecret(name: SecretName): MiddlewareHandler<{ Bindings: Env }> {
+export function requireSecret(name: SecretName, hint?: string): MiddlewareHandler<{ Bindings: Env }> {
   return async (c, next) => {
     const expected = c.env[name] ?? "";
     if (!expected) {
@@ -37,7 +37,7 @@ export function requireSecret(name: SecretName): MiddlewareHandler<{ Bindings: E
     }
     const provided = bearerToken(c.req.header("authorization"));
     if (!provided || !(await secretMatches(provided, expected))) {
-      return c.json({ error: "unauthorized" }, 401);
+      return c.json(hint ? { error: "unauthorized", hint } : { error: "unauthorized" }, 401);
     }
     await next();
   };

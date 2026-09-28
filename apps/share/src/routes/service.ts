@@ -1,6 +1,17 @@
-import { Hono } from "hono";
+import { type Context, Hono } from "hono";
 import { requireSecret } from "../lib/auth";
-import { listDomains } from "../lib/intake";
+import { automationHelp } from "../lib/help";
+import { latestField, listDomains, messagesByMailbox } from "../lib/intake";
+import {
+  domainNotAvailable,
+  type Field,
+  isFresh,
+  parseLatestQuery,
+  parseMessagesQuery,
+  pickAddress,
+  pollFresh,
+  secureRandomInt,
+} from "../lib/receive";
 import * as store from "../lib/store";
 import type { Env } from "../lib/types";
 import { normalizeDomain } from "../lib/validate";
@@ -19,7 +30,53 @@ async function body<T extends object>(c: { req: { json: <U>() => Promise<U> } })
   }
 }
 
-service.use("*", requireSecret("AUTOMATION_TOKEN"));
+/** Public on purpose: an agent handed only the URL must be able to learn the API. */
+const help = (c: Context<{ Bindings: Env }>) =>
+  c.body(automationHelp(new URL(c.req.url).origin), 200, { "content-type": "text/markdown; charset=utf-8" });
+service.get("/", help);
+service.get("/help", help);
+
+service.use("*", requireSecret("AUTOMATION_TOKEN", "Send Authorization: Bearer <token>. Usage: GET /api/v1/help"));
+
+async function enabledDomains(env: Env): Promise<string[]> {
+  return (await listDomains(env)).filter((d) => d.enabled).map((d) => d.domain);
+}
+
+/** A random address on an enabled domain. Catch-all routing means it already receives mail. */
+service.post("/addresses", async (c) => {
+  const input = await body<{ domain: string }>(c);
+  const address = pickAddress(await enabledDomains(c.env), input.domain, secureRandomInt);
+  return c.json(address, address.ok ? 200 : 400);
+});
+
+/**
+ * Newest code or link for one address, optionally held open until a fresh one lands.
+ * "Nothing yet" is an answer, so it is 200 with ok:false rather than an HTTP error.
+ */
+async function latest(c: Context<{ Bindings: Env }>, field: Field) {
+  const query = parseLatestQuery(c.req.query(), Date.now());
+  if (!query.ok) return c.json(query, 400);
+  const unavailable = domainNotAvailable(query.email, await enabledDomains(c.env));
+  if (unavailable) return c.json(unavailable, 400);
+
+  const item = await pollFresh(() => latestField(c.env, query.email, field), query);
+  if (!item) return c.json({ ok: false, error: `no_${field}_found`, item: null, [field]: "" });
+  return c.json({ ok: true, [field]: item[field] ?? "", item });
+}
+
+service.get("/code", (c) => latest(c, "code"));
+service.get("/link", (c) => latest(c, "link"));
+
+/** Full stored mail for one address. Only by address: this token cannot browse a domain. */
+service.get("/messages", async (c) => {
+  const query = parseMessagesQuery(c.req.query(), Date.now());
+  if (!query.ok) return c.json(query, 400);
+  const unavailable = domainNotAvailable(query.email, await enabledDomains(c.env));
+  if (unavailable) return c.json(unavailable, 400);
+
+  const items = await messagesByMailbox(c.env, query.email, query.limit);
+  return c.json({ ok: true, items: items.filter((m) => isFresh(m.received_at, query.since)) });
+});
 
 /**
  * Claim domains for an automation run.

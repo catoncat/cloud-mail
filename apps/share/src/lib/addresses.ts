@@ -8,8 +8,13 @@ const NOUNS = ["birch", "comet", "field", "harbor", "maple", "orbit", "pixel", "
 const SAFE_CHARS = "23456789abcdefghjkmnpqrstuvwxyz";
 
 export class AddressModelError extends Error {
-  constructor(readonly code: string, readonly status: 400 | 404 | 409 | 503 = 400) {
+  readonly code: string;
+  readonly status: 400 | 404 | 409 | 503;
+
+  constructor(code: string, status: 400 | 404 | 409 | 503 = 400) {
     super(code);
+    this.code = code;
+    this.status = status;
   }
 }
 

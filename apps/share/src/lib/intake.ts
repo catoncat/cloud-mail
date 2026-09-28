@@ -177,6 +177,19 @@ export async function messagesByMailbox(env: Env, email: string, limit = 1): Pro
   return data.items ?? [];
 }
 
+export type LatestItem = { id?: string; recipient?: string; subject?: string; received_at?: string } & Record<string, string | undefined>;
+
+/** Newest stored code or link for one mailbox; null when none has been extracted yet. */
+export async function latestField(env: Env, email: string, field: "code" | "link"): Promise<LatestItem | null> {
+  try {
+    const data = await call<{ item?: LatestItem }>(env, `/admin/latest-${field}`, { email });
+    return data.item ?? null;
+  } catch (err) {
+    if (err instanceof IntakeError && err.code === `no_${field}_found`) return null;
+    throw err;
+  }
+}
+
 export async function deleteMailboxMessages(env: Env, email: string): Promise<number> {
   const data = await request<{ changes?: number }>(env, "DELETE", "/admin/messages", { params: { email } });
   return Number(data.changes ?? 0);
