@@ -10,13 +10,15 @@ Use the project CLI instead of reconstructing Cloudflare Worker, D1, DNS, Email 
 
 ## Configure These Locally
 
-- CLI: `cloud-mail` (installed by `npm run install:global` in `apps/intake`), or `node <intake>/scripts/cli.mjs`
-- Intake dir: `dirname "$(dirname "$(cloud-mail token-path)")"`; the repo root is two levels above it
-- Config: `<intake>/config/domains.json`
-- Admin token file: `<intake>/.secrets/mail-admin-token.txt`
-- API host: whatever `config/domains.json` uses, for example `https://mail.example.com`
+- CLI: `cloud-mail` (installed by `npm run install:global` in `apps/intake`), or `node <repo>/apps/intake/scripts/cli.mjs`
+- Keys file: `<repo>/.secrets/cloud-mail.env` (gitignored, mode `600`) with `CLOUD_MAIL_ORIGIN`, `OPERATOR_KEY`, `AUTOMATION_TOKEN`
+- Repo root: `dirname "$(dirname "$(cloud-mail token-path)")"` (`token-path` prints the keys file in use)
+- Config: `<repo>/apps/intake/config/domains.json`
+- API: the CLI calls share at `$CLOUD_MAIL_ORIGIN/admin/api/intake/*` with `OPERATOR_KEY`; share relays to intake over a Service Binding, so responses are identical to intake's
 
-Do not print the admin token. Use the CLI for Worker API calls because it reads the token locally and sends it as `Authorization: Bearer ...`.
+Legacy fallback: without `CLOUD_MAIL_ORIGIN` and `OPERATOR_KEY` in the keys file, the CLI calls intake's public `api_host` directly with `<repo>/apps/intake/.secrets/mail-admin-token.txt`. That path is being retired; do not build on it.
+
+Do not print any key. Use the CLI for Worker API calls because it reads the key locally and sends it as `Authorization: Bearer ...`.
 
 ## Cloudflare Auth Lane
 
@@ -105,7 +107,7 @@ cloud-mail clear --email test@mailbox.example.com
 
 ## Raw Worker API
 
-Prefer CLI wrappers. If a one-off endpoint is needed:
+Prefer CLI wrappers. If a one-off endpoint is needed (paths are intake paths; the CLI adds the share relay prefix):
 
 ```bash
 cloud-mail api GET /admin/domains
@@ -122,7 +124,7 @@ cloud-mail api DELETE '/admin/messages?email=test@mailbox.example.com'
 
 ## Shareable code inbox (cloud-mail-share)
 
-Human UI for **passwordless re-login** and **OTP handoff to another person**. Reads from intake (`INTAKE_ORIGIN`); never exposes intake `MAIL_ADMIN_TOKEN` to the browser.
+Human UI for **passwordless re-login** and **OTP handoff to another person**. Reads intake through the `INTAKE` Service Binding; no intake token exists in share or the browser.
 
 ### Hosts
 
@@ -188,24 +190,25 @@ PATCH  /admin/api/addresses/:mailbox
 DELETE /admin/api/addresses/:mailbox/messages
 ```
 
-### Admin key (share UI, not intake)
+### Keys (all on the share Worker)
 
-This is **different** from intake `MAIL_ADMIN_TOKEN`.
+| Key | Used by | Surface |
+| --- | --- | --- |
+| `OPERATOR_KEY` | admin PWA, `cloud-mail` CLI, admin curl | `/admin/api/*`, including the `/admin/api/intake/*` relay |
+| `AUTOMATION_TOKEN` | automation clients | `/api/v1/*` |
+| `CF_API_TOKEN` | share itself, to configure Email Routing | Cloudflare API |
 
-| Item | Path / value source |
-| --- | --- |
-| Local credentials file | `apps/share/.secrets/share-admin.credentials` (gitignored) |
-| Env var name in file | `CLOUD_MAIL_SHARE_ADMIN_KEY=...` |
-| Override | `CLOUD_MAIL_SHARE_CREDENTIALS` |
-| Admin page | `<share-origin>/admin` |
+Local copy: `<repo>/.secrets/cloud-mail.env` (written by `apps/share` setup). `allow-mailbox.sh` honors `CLOUD_MAIL_SECRETS` as an override. Neither key works on the other surface.
 
-Show the key to the user (do not paste into git/docs):
+Show the operator key to the user (do not paste into git/docs):
 
 ```bash
-sed -n 's/^CLOUD_MAIL_SHARE_ADMIN_KEY=//p' apps/share/.secrets/share-admin.credentials
+sed -n 's/^OPERATOR_KEY=//p' .secrets/cloud-mail.env
 ```
 
-Paste that value into the admin page auth box. File mode should stay `600`.
+Paste that value into the admin page auth box at `<share-origin>/admin`. File mode should stay `600`.
+
+`apps/share/.secrets/share-admin.credentials` (`CLOUD_MAIL_SHARE_ADMIN_KEY`) is the legacy copy of the same operator key, kept for older scripts. Do not add new readers of it.
 
 Do **not** print the key in commits, PR text, or public chat logs. Agents may read the local file to call admin APIs.
 
@@ -219,31 +222,31 @@ apps/share/scripts/allow-mailbox.sh --link name@mailbox.example.com
 apps/share/scripts/allow-mailbox.sh name@mailbox.example.com
 ```
 
-API (admin key from credentials file):
+API (from the repo root):
 
 ```bash
-admin_key="$(sed -n 's/^CLOUD_MAIL_SHARE_ADMIN_KEY=//p' apps/share/.secrets/share-admin.credentials)"
-origin="https://inbox.example.com"
+operator_key="$(sed -n 's/^OPERATOR_KEY=//p' .secrets/cloud-mail.env)"
+origin="$(sed -n 's/^CLOUD_MAIL_ORIGIN=//p' .secrets/cloud-mail.env)"
 
 # create share link
 curl -sS -X POST "$origin/admin/api/links" \
-  -H "Authorization: Bearer ${admin_key}" \
+  -H "Authorization: Bearer ${operator_key}" \
   -H 'content-type: application/json' \
   --data '{"mailbox":"name@mailbox.example.com","label":"shared-with-alice"}'
 
 # whitelist mailbox
 curl -sS -X POST "$origin/admin/api/mailboxes" \
-  -H "Authorization: Bearer ${admin_key}" \
+  -H "Authorization: Bearer ${operator_key}" \
   -H 'content-type: application/json' \
   --data '{"mailbox":"name@mailbox.example.com"}'
 
 # revoke share link
 curl -sS -X DELETE "$origin/admin/api/links/<id>" \
-  -H "Authorization: Bearer ${admin_key}"
+  -H "Authorization: Bearer ${operator_key}"
 
 # revoke whitelist
 curl -sS -X DELETE "$origin/admin/api/mailboxes/name@mailbox.example.com" \
-  -H "Authorization: Bearer ${admin_key}"
+  -H "Authorization: Bearer ${operator_key}"
 ```
 
 ### Deploy share UI
@@ -258,7 +261,7 @@ npm run deploy
 - Prefer `/s/<id>` when the user will hand the inbox to another person.
 - Prefer `?mail=` only for the owner's own re-login convenience after whitelist.
 - When an address backs an account, create a share link and keep `share_inbox_url` alongside the account record.
-- Set the public origin with `CLOUD_MAIL_SHARE_ORIGIN`.
+- The public origin is `CLOUD_MAIL_ORIGIN` in `.secrets/cloud-mail.env`.
 
 ## Operational Checks
 
