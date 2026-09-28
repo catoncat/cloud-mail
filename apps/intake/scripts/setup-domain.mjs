@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-import { readFileSync } from "node:fs";
 import {
   cfFetch,
   loadConfig,
@@ -9,38 +8,13 @@ import {
 const args = new Set(process.argv.slice(2));
 const configPath = valueAfter("--config") ?? "config/domains.json";
 const skipDns = args.has("--skip-dns");
-const skipWorkerAdmin = args.has("--skip-worker-admin");
 const config = loadConfig(configPath);
 
-await configureWorkerDomains();
 await configureCloudflareDomains();
 
 function valueAfter(name) {
   const index = process.argv.indexOf(name);
   return index >= 0 ? process.argv[index + 1] : null;
-}
-
-async function configureWorkerDomains() {
-  if (skipWorkerAdmin) return;
-  const token = readFileSync(".secrets/mail-admin-token.txt", "utf8").trim();
-  for (const entry of config.domains) {
-    const response = await fetch(`https://${config.api_host}/admin/domains`, {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${token}`,
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        domain: entry.domain,
-        zone: entry.zone || entry.domain,
-        enabled: entry.enabled,
-      }),
-    });
-    if (!response.ok) {
-      throw new Error(`Worker admin upsert failed for ${entry.domain}: ${response.status} ${await response.text()}`);
-    }
-    console.log(`[ok] worker domain allowlist: ${entry.domain}`);
-  }
 }
 
 async function configureCloudflareDomains() {

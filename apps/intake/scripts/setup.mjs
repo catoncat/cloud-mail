@@ -1,7 +1,5 @@
 #!/usr/bin/env node
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { randomBytes } from "node:crypto";
-import { spawnSync } from "node:child_process";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { loadConfig, run } from "./cf-api.mjs";
 
 const args = new Set(process.argv.slice(2));
@@ -10,36 +8,27 @@ const skipDeploy = args.has("--skip-deploy");
 const skipEmailRouting = args.has("--skip-email-routing");
 const config = loadConfig(configPath);
 
-mkdirSync(".secrets", { recursive: true });
 ensureWranglerConfig();
-ensureAdminToken();
 await ensureDependencies();
 const databaseId = ensureD1Database(config.database_name, config.database_id);
 updateWrangler(config, databaseId);
 applyMigrations(config.database_name);
 seedConfiguredDomains(config);
 seedConfiguredForwards(config);
-putSecret("MAIL_ADMIN_TOKEN", readFileSync(".secrets/mail-admin-token.txt", "utf8").trim());
 
 if (!skipDeploy) {
   run("npx", ["wrangler", "deploy"]);
 }
 
 if (!skipEmailRouting) {
-  run("node", ["scripts/setup-domain.mjs", "--config", configPath, "--skip-worker-admin"]);
+  run("node", ["scripts/setup-domain.mjs", "--config", configPath]);
 }
 
-console.log(`[done] https://${config.api_host}/healthz`);
+console.log("[done] intake deployed. It has no public URL; check it through share with: cloud-mail health");
 
 function valueAfter(name) {
   const index = process.argv.indexOf(name);
   return index >= 0 ? process.argv[index + 1] : null;
-}
-
-function ensureAdminToken() {
-  if (existsSync(".secrets/mail-admin-token.txt")) return;
-  writeFileSync(".secrets/mail-admin-token.txt", `${randomBytes(32).toString("base64url")}\n`, { mode: 0o600 });
-  console.log("[ok] generated .secrets/mail-admin-token.txt");
 }
 
 function ensureWranglerConfig() {
@@ -104,9 +93,8 @@ function ensureD1Database(name, configuredId) {
 function updateWrangler(currentConfig, databaseId) {
   let text = readFileSync("wrangler.jsonc", "utf8");
   // Anchored to the top-level key at its own indentation. A bare /"name":/ would
-  // also match nested bindings such as ratelimits[].name and rewrite the wrong one.
+  // also match a nested binding's "name" and rewrite the wrong one.
   text = replaceTopLevel(text, "name", currentConfig.worker_name);
-  text = text.replace(/"pattern":\s*"[^"]+"/u, `"pattern": "${currentConfig.api_host}"`);
   text = text.replace(/"database_name":\s*"[^"]+"/u, `"database_name": "${currentConfig.database_name}"`);
   text = text.replace(/"database_id":\s*"[^"]+"/u, `"database_id": "${databaseId}"`);
   writeFileSync("wrangler.jsonc", text);
@@ -173,17 +161,4 @@ function seedConfiguredForwards(currentConfig) {
 
 function sqlString(value) {
   return `'${String(value).replaceAll("'", "''")}'`;
-}
-
-function putSecret(name, value) {
-  const result = spawnSync("npx", ["wrangler", "secret", "put", name], {
-    input: `${value}\n`,
-    encoding: "utf8",
-    stdio: ["pipe", "pipe", "pipe"],
-    env: process.env,
-  });
-  if (result.status !== 0) {
-    throw new Error(`wrangler secret put ${name} failed:\n${result.stderr || result.stdout}`);
-  }
-  console.log(`[ok] secret uploaded: ${name}`);
 }

@@ -25,7 +25,7 @@ Create local config, then add any apex or subdomain mailbox domain:
 ```bash
 cp config/domains.example.json config/domains.json
 cp wrangler.example.jsonc wrangler.jsonc
-cloud-mail config set --api-host mail.example.com --worker-name cloud-mail-intake
+cloud-mail config set --worker-name cloud-mail-intake
 cloud-mail config add --domain mailbox.example.com --zone example.com
 cloud-mail config add --domain example.net --zone example.net
 cloud-mail config add-forward --domain example.com --zone example.com --destination you@gmail.com
@@ -36,7 +36,6 @@ This writes `config/domains.json`:
 
 ```json
 {
-  "api_host": "mail.example.com",
   "worker_name": "cloud-mail-intake",
   "database_name": "cloud-mail-intake",
   "database_id": "",
@@ -74,7 +73,7 @@ Use Cloudflare credentials that can manage Workers, D1, DNS, and Email Routing f
 cloud-mail setup
 ```
 
-`setup` seeds configured domains directly into D1 before routing setup, so first deploy does not depend on the public API host already resolving.
+`setup` seeds configured domains directly into D1, then configures Email Routing DNS and the catch-all rule for each zone. `cloud-mail route setup` reruns only the Cloudflare side.
 
 If you manage Cloudflare credentials through a wrapper, run setup through that wrapper:
 
@@ -84,7 +83,10 @@ your-cloudflare-env-wrapper cloud-mail setup
 
 ## Query
 
-The setup script writes the admin token to `.secrets/mail-admin-token.txt` and uploads it as the Worker secret `MAIL_ADMIN_TOKEN`.
+Intake has no public URL and no token. Its JSON API is the `InternalApi` entrypoint,
+reached only through the share Worker's Service Binding. The CLI calls share's
+`/admin/api/intake/*` relay with `OPERATOR_KEY` from the repo-root
+`.secrets/cloud-mail.env`, so deploy `apps/share` before querying.
 
 ```bash
 cloud-mail domains list
@@ -130,19 +132,9 @@ Deployments whose `wrangler.jsonc` predates the cron trigger keep the ingestion-
 sweep only, which means **mail in an idle domain never expires**. Copy the `triggers`
 block into your local `wrangler.jsonc` and redeploy.
 
-## Rate limiting
-
-`/admin/*` is capped by the optional `ADMIN_RATE_LIMIT` binding (100 requests per
-minute per client IP, checked before the token so it bounds token guessing). The
-Worker runs fine without the binding — it simply does not rate limit. Copy the
-`ratelimits` block from `wrangler.example.jsonc` to enable it.
-
-`namespace_id` must be a positive integer unique within your Cloudflare account; change it if `1001` is already used by another Worker.
-
 ## Notes
 
 - This project only receives and stores mail. It does not send mail.
 - Unknown recipient domains are rejected by the Worker.
 - Catch-all routing is configured per Cloudflare zone, then the Worker allowlist decides which full domains are accepted.
-- If `MAIL_ADMIN_TOKEN` is not uploaded, `/admin/*` returns `503 admin_token_not_configured` rather than accepting requests.
 - Redelivered mail is deduplicated on `(recipient, message_id)`, so a retry cannot produce a second copy of the same one-time code.

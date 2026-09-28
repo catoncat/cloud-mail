@@ -97,10 +97,8 @@ Three secrets, all on the share Worker:
 | `AUTOMATION_TOKEN` | automation clients | `/api/v1/*` |
 | `CF_API_TOKEN` | share itself, to configure Email Routing | Cloudflare API |
 
-Intake needs no secret: share reaches it through a Service Binding, which is not
-reachable from the internet. (Until the migration finishes, intake's legacy public
-`/admin/*` still answers to `MAIL_ADMIN_TOKEN`; the CLI only uses it when
-`.secrets/cloud-mail.env` is absent.)
+Intake needs no secret and has no public URL: share reaches it through a Service
+Binding, which is not reachable from the internet.
 
 Local files (all gitignored):
 

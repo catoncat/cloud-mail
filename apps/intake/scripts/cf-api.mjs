@@ -62,7 +62,6 @@ export function normalizeDomain(domain) {
 
 export function loadConfig(pathname) {
   const config = JSON.parse(readFile(pathname));
-  config.api_host = normalizeDomain(config.api_host);
   config.worker_name = String(config.worker_name ?? "cloud-mail-intake").trim();
   config.database_name = String(config.database_name ?? config.worker_name).trim();
   config.database_id = String(config.database_id ?? "").trim();
@@ -81,7 +80,6 @@ export function loadConfig(pathname) {
     enabled: entry.enabled !== false,
     configure_dns: entry.configure_dns !== false,
   }));
-  if (!config.api_host) throw new Error("config.api_host is required");
   if (!config.worker_name) throw new Error("config.worker_name is required");
   if (!config.domains.length) throw new Error("config.domains must contain at least one domain");
   return config;

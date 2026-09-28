@@ -2,24 +2,10 @@ import { WorkerEntrypoint } from "cloudflare:workers";
 import PostalMime from "postal-mime";
 import { extractCode, extractLink, stripHtml } from "./extract";
 
-/**
- * Subset of the Workers Rate Limiting API we depend on.
- *
- * Declared locally rather than imported so the Worker still type-checks and
- * deploys on configs that predate the `ratelimits` binding.
- */
-interface RateLimiter {
-  limit(options: { key: string }): Promise<{ success: boolean }>;
-}
-
 interface Env {
   DB: D1Database;
-  /** Only guards the public `/admin/*` surface; the internal entrypoint needs no token. */
-  MAIL_ADMIN_TOKEN?: string;
   MAX_RAW_BYTES?: string;
   RETENTION_HOURS?: string;
-  /** Optional: absent on deployments whose wrangler config has no `ratelimits` entry. */
-  ADMIN_RATE_LIMIT?: RateLimiter;
 }
 
 interface DomainRow {
@@ -81,21 +67,21 @@ const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 500;
 
 /**
- * Internal entrypoint for the share Worker's Service Binding.
+ * The JSON API, reachable only through the share Worker's Service Binding.
  *
  * Named entrypoints are unreachable from the internet — only a binding that names
- * this class can call it — so the binding itself is the credential. Same JSON API
- * as `/admin/*`, minus the token and the per-IP rate limit.
+ * this class can call it — so the binding itself is the credential.
  */
 export class InternalApi extends WorkerEntrypoint<Env> {
   async fetch(request: Request): Promise<Response> {
-    return handle(request, this.env, { trusted: true });
+    return handle(request, this.env);
   }
 }
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
-    return handle(request, env, { trusted: false });
+  /** No public HTTP surface: the Worker has no route, and this answers if one is ever added. */
+  async fetch(): Promise<Response> {
+    return text("Not found", 404);
   },
 
   async email(message: ForwardableEmailMessage, env: Env): Promise<void> {
@@ -126,23 +112,22 @@ export default {
   },
 } satisfies ExportedHandler<Env>;
 
-async function handle(request: Request, env: Env, options: { trusted: boolean }): Promise<Response> {
+async function handle(request: Request, env: Env): Promise<Response> {
   // D1 and JSON parsing both throw. Without this the runtime turns any failure
   // into an opaque 1101, so callers cannot tell a bug from a bad request.
   try {
-    return await route(request, env, options);
+    return await route(request, env);
   } catch (error) {
     console.error("request_failed", {
       method: request.method,
       path: new URL(request.url).pathname,
-      trusted: options.trusted,
       error: errorMessage(error),
     });
     return json({ ok: false, error: "internal_error" }, 500);
   }
 }
 
-async function route(request: Request, env: Env, { trusted }: { trusted: boolean }): Promise<Response> {
+async function route(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
 
   if (request.method === "GET" && (url.pathname === "/" || url.pathname === "/healthz")) {
@@ -151,15 +136,6 @@ async function route(request: Request, env: Env, { trusted }: { trusted: boolean
 
   if (!url.pathname.startsWith("/admin/")) {
     return text("Not found", 404);
-  }
-
-  if (!trusted) {
-    // Before auth on purpose: this is what caps token guessing.
-    const rateLimited = await enforceRateLimit(request, env);
-    if (rateLimited) return rateLimited;
-
-    const authError = await requireAdmin(request, env);
-    if (authError) return authError;
   }
 
   if (request.method === "GET" && url.pathname === "/admin/domains") {
@@ -613,55 +589,6 @@ async function getDomain(domain: string, env: Env): Promise<DomainRow | null> {
 
 async function getForward(domain: string, env: Env): Promise<ForwardRow | null> {
   return env.DB.prepare("SELECT * FROM forwards WHERE domain = ?1 LIMIT 1").bind(domain).first<ForwardRow>();
-}
-
-async function requireAdmin(request: Request, env: Env): Promise<Response | null> {
-  const expected = typeof env.MAIL_ADMIN_TOKEN === "string" ? env.MAIL_ADMIN_TOKEN : "";
-  // Fail closed, and say why. An unset secret used to be encoded as the literal
-  // string "undefined", so `Authorization: Bearer undefined` authenticated. A 401
-  // here would look like a wrong token and send operators hunting the wrong bug.
-  if (!expected) {
-    console.error("admin_token_not_configured");
-    return json({ ok: false, error: "admin_token_not_configured" }, 503);
-  }
-
-  const header = request.headers.get("authorization") ?? "";
-  const match = /^Bearer\s+(.+)$/iu.exec(header);
-  if (!match || !(await timingSafeEqual(match[1], expected))) {
-    return json({ ok: false, error: "unauthorized" }, 401);
-  }
-  return null;
-}
-
-/**
- * Caps `/admin/*` traffic when a `ratelimits` binding is configured.
- *
- * Keyed by client IP because this runs before auth, where the caller's identity is
- * exactly what is still unproven. No-ops when the binding is absent so existing
- * deployments keep working without a config change.
- */
-async function enforceRateLimit(request: Request, env: Env): Promise<Response | null> {
-  const limiter = env.ADMIN_RATE_LIMIT;
-  if (!limiter) return null;
-
-  const key = request.headers.get("cf-connecting-ip") ?? "unknown";
-  const { success } = await limiter.limit({ key });
-  if (success) return null;
-
-  return json({ ok: false, error: "rate_limited" }, 429);
-}
-
-async function timingSafeEqual(left: string, right: string): Promise<boolean> {
-  const encoder = new TextEncoder();
-  const [leftHash, rightHash] = await Promise.all([
-    crypto.subtle.digest("SHA-256", encoder.encode(left)),
-    crypto.subtle.digest("SHA-256", encoder.encode(right)),
-  ]);
-  const a = new Uint8Array(leftHash);
-  const b = new Uint8Array(rightHash);
-  let diff = 0;
-  for (let index = 0; index < a.length; index += 1) diff |= a[index] ^ b[index];
-  return left.length === right.length && diff === 0;
 }
 
 function messageProjection(): string {

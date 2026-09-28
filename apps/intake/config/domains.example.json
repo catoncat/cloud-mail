@@ -1,5 +1,4 @@
 {
-  "api_host": "mail.example.com",
   "worker_name": "cloud-mail-intake",
   "database_name": "cloud-mail-intake",
   "database_id": "",

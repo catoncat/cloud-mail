@@ -28,7 +28,6 @@ CLOUDFLARE_EMAIL + CLOUDFLARE_GLOBAL_API_KEY), and a deployed intake Worker
 
 /** Single local secrets file for the whole project; the CLI reads it too. */
 const SECRETS_FILE = "../../.secrets/cloud-mail.env";
-const LEGACY_CREDENTIALS = ".secrets/share-admin.credentials";
 
 ensureWranglerConfig();
 await ensureDependencies();
@@ -90,22 +89,9 @@ async function ensureDependencies() {
   run("npm", ["install"]);
 }
 
-/**
- * OPERATOR_KEY and AUTOMATION_TOKEN, generated once and reused on every run.
- *
- * The first run adopts the legacy console key as OPERATOR_KEY so browsers that
- * already saved it stay logged in.
- */
+/** OPERATOR_KEY and AUTOMATION_TOKEN, generated once and reused on every run. */
 function ensureSecrets() {
   const values = existsSync(SECRETS_FILE) ? parseEnv(readFileSync(SECRETS_FILE, "utf8")) : {};
-  if (!values.OPERATOR_KEY && existsSync(LEGACY_CREDENTIALS)) {
-    const legacy = parseEnv(readFileSync(LEGACY_CREDENTIALS, "utf8"));
-    if (legacy.CLOUD_MAIL_SHARE_ADMIN_KEY) {
-      values.OPERATOR_KEY = legacy.CLOUD_MAIL_SHARE_ADMIN_KEY;
-      values.CLOUD_MAIL_ORIGIN ||= legacy.CLOUD_MAIL_SHARE_ORIGIN;
-      console.log(`[ok] adopted ${LEGACY_CREDENTIALS} as OPERATOR_KEY`);
-    }
-  }
   values.OPERATOR_KEY ||= randomBytes(32).toString("base64url");
   values.AUTOMATION_TOKEN ||= randomBytes(32).toString("base64url");
   if (shareHost) values.CLOUD_MAIL_ORIGIN = `https://${shareHost}`;

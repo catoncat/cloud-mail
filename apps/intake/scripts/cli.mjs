@@ -56,7 +56,7 @@ async function main() {
     case "api":
       return apiCommand(args.slice(1));
     case "token-path":
-      return console.log(existsSync(SECRETS_FILE) ? SECRETS_FILE : resolve(repoRoot, ".secrets/mail-admin-token.txt"));
+      return console.log(SECRETS_FILE);
     default:
       throw new Error(`Unknown command: ${command}. Run: cloud-mail help`);
   }
@@ -69,7 +69,7 @@ Config:
   cloud-mail config show
   cloud-mail config add --domain mailbox.example.com --zone example.com
   cloud-mail config remove --domain mailbox.example.com
-  cloud-mail config set --api-host mail.example.com --worker-name cloud-mail-intake
+  cloud-mail config set --worker-name cloud-mail-intake
 
 Deploy/routing:
   cloud-mail setup
@@ -93,8 +93,8 @@ Worker API:
   cloud-mail api GET /admin/domains
   cloud-mail api POST /admin/domains --json '{"domain":"x.example.com","enabled":true}'
 
-Worker API calls go through share when .secrets/cloud-mail.env (repo root) has
-CLOUD_MAIL_ORIGIN and OPERATOR_KEY; otherwise straight to intake's api_host.
+Worker API calls go through share, using CLOUD_MAIL_ORIGIN and OPERATOR_KEY
+from .secrets/cloud-mail.env at the repo root (written by apps/share setup).
 `);
 }
 
@@ -168,11 +168,9 @@ function removeForward(rest) {
 function setConfig(rest) {
   const path = configPath(rest);
   const raw = readConfigRaw(path);
-  const apiHost = option(rest, "--api-host");
   const workerName = option(rest, "--worker-name");
   const databaseName = option(rest, "--database-name");
   const databaseId = option(rest, "--database-id");
-  if (apiHost) raw.api_host = normalizeDomain(apiHost);
   if (workerName) raw.worker_name = workerName;
   if (databaseName) raw.database_name = databaseName;
   if (databaseId) raw.database_id = databaseId;
@@ -288,21 +286,18 @@ async function workerFetch(method, path, body) {
 }
 
 /**
- * Where Worker API calls go.
+ * Worker API calls go through share, authenticated with OPERATOR_KEY.
  *
- * With `.secrets/cloud-mail.env` in place they go through share, authenticated
- * with OPERATOR_KEY; share relays intake's JSON verbatim, so output is unchanged
- * for the tools that parse it. Without the file they go straight to intake with
- * the legacy admin token. The file is the cutover switch: remove it to roll back.
+ * Intake has no public URL; share relays its JSON verbatim, so the output is
+ * exactly what intake returns and the tools that parse it see no difference.
  */
 function apiTarget(path) {
   const secrets = existsSync(SECRETS_FILE) ? parseEnv(readFileSync(SECRETS_FILE, "utf8")) : {};
-  if (secrets.CLOUD_MAIL_ORIGIN && secrets.OPERATOR_KEY) {
-    const origin = secrets.CLOUD_MAIL_ORIGIN.replace(/\/+$/u, "");
-    return { url: `${origin}/admin/api/intake${path}`, token: secrets.OPERATOR_KEY };
+  if (!secrets.CLOUD_MAIL_ORIGIN || !secrets.OPERATOR_KEY) {
+    throw new Error(`Missing CLOUD_MAIL_ORIGIN or OPERATOR_KEY in ${SECRETS_FILE}. Run apps/share setup with --host.`);
   }
-  const config = loadConfig(configPath(args));
-  return { url: `https://${config.api_host}${path}`, token: adminToken() };
+  const origin = secrets.CLOUD_MAIL_ORIGIN.replace(/\/+$/u, "");
+  return { url: `${origin}/admin/api/intake${path}`, token: secrets.OPERATOR_KEY };
 }
 
 function parseEnv(text) {
@@ -317,7 +312,6 @@ function parseEnv(text) {
 function readConfigRaw(path) {
   if (!existsSync(path)) {
     return {
-      api_host: "mail.example.com",
       worker_name: "cloud-mail-intake",
       database_name: "cloud-mail-intake",
       database_id: "",
@@ -334,14 +328,6 @@ function writeConfigRaw(path, config) {
 
 function configPath(rest) {
   return option(rest, "--config") ?? "config/domains.json";
-}
-
-function adminToken() {
-  const tokenPath = ".secrets/mail-admin-token.txt";
-  if (!existsSync(tokenPath)) {
-    throw new Error("Missing .secrets/mail-admin-token.txt. Run: cloud-mail setup");
-  }
-  return readFileSync(tokenPath, "utf8").trim();
 }
 
 function requiredOption(rest, name) {

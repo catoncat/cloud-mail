@@ -161,9 +161,7 @@ npm run setup -- --host inbox.example.com
 
 `setup` creates the KV namespace, writes `wrangler.toml` (including the `INTAKE`
 Service Binding), generates `OPERATOR_KEY` and `AUTOMATION_TOKEN` into the repo-root
-`.secrets/cloud-mail.env`, uploads both as secrets, builds, and deploys. On first run it
-adopts a legacy `.secrets/share-admin.credentials` key as `OPERATOR_KEY`, so saved
-console logins keep working.
+`.secrets/cloud-mail.env`, uploads both as secrets, builds, and deploys.
 
 | Secret | Guards | Uploaded by setup |
 | --- | --- | --- |

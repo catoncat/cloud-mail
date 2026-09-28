@@ -12,11 +12,11 @@ Use the project CLI instead of reconstructing Cloudflare Worker, D1, DNS, Email 
 
 - CLI: `cloud-mail` (installed by `npm run install:global` in `apps/intake`), or `node <repo>/apps/intake/scripts/cli.mjs`
 - Keys file: `<repo>/.secrets/cloud-mail.env` (gitignored, mode `600`) with `CLOUD_MAIL_ORIGIN`, `OPERATOR_KEY`, `AUTOMATION_TOKEN`
-- Repo root: `dirname "$(dirname "$(cloud-mail token-path)")"` (`token-path` prints the keys file in use)
+- Repo root: `dirname "$(dirname "$(cloud-mail token-path)")"` (`token-path` prints the keys file)
 - Config: `<repo>/apps/intake/config/domains.json`
 - API: the CLI calls share at `$CLOUD_MAIL_ORIGIN/admin/api/intake/*` with `OPERATOR_KEY`; share relays to intake over a Service Binding, so responses are identical to intake's
 
-Legacy fallback: without `CLOUD_MAIL_ORIGIN` and `OPERATOR_KEY` in the keys file, the CLI calls intake's public `api_host` directly with `<repo>/apps/intake/.secrets/mail-admin-token.txt`. That path is being retired; do not build on it.
+Intake has no public URL and no token; everything goes through share.
 
 Do not print any key. Use the CLI for Worker API calls because it reads the key locally and sends it as `Authorization: Bearer ...`.
 
@@ -67,7 +67,7 @@ Create local config:
 cp config/domains.example.json config/domains.json
 # If wrangler.jsonc already exists, merge new `triggers`/`ratelimits` into it.
 # Do not `cp wrangler.example.jsonc wrangler.jsonc` over an existing local file.
-cloud-mail config set --api-host mail.example.com --worker-name cloud-mail-intake
+cloud-mail config set --worker-name cloud-mail-intake
 ```
 
 Then run `cloud-mail setup` and the Operational Checks below.
@@ -207,8 +207,6 @@ sed -n 's/^OPERATOR_KEY=//p' .secrets/cloud-mail.env
 ```
 
 Paste that value into the admin page auth box at `<share-origin>/admin`. File mode should stay `600`.
-
-`apps/share/.secrets/share-admin.credentials` (`CLOUD_MAIL_SHARE_ADMIN_KEY`) is the legacy copy of the same operator key, kept for older scripts. Do not add new readers of it.
 
 Do **not** print the key in commits, PR text, or public chat logs. Agents may read the local file to call admin APIs.
 
