@@ -12,7 +12,16 @@ import {
   toLatest,
   upsertIntakeDomain,
 } from "../lib/intake";
-import { CloudflareError, enableEmailRouting, findZone, getCatchAll, listZones, setCatchAll } from "../lib/cloudflare";
+import {
+  CloudflareError,
+  enableEmailRouting,
+  findZone,
+  getCatchAll,
+  hasRoutingMx,
+  listZones,
+  setCatchAll,
+} from "../lib/cloudflare";
+import { type Check, followUpFor, readiness, type RoutingStatus } from "../lib/domains";
 import * as store from "../lib/store";
 import type { Env } from "../lib/types";
 import { createLinkId, isValidLinkId, normalizeDomain, normalizeMailbox, splitMailboxes } from "../lib/validate";
@@ -95,24 +104,29 @@ api.get("/zones", async (c) => {
  * 1. Find the Cloudflare zone that owns the domain.
  * 2. Enable Email Routing DNS records for the domain.
  * 3. Point the zone catch-all at the intake Worker (idempotent PUT).
- * 4. Register the domain in the intake allowlist.
+ * 4. Confirm public DNS shows the Cloudflare MX records for the domain.
+ * 5. Register the domain in the intake allowlist.
  *
- * When `CF_API_TOKEN` is absent, steps 2-3 are skipped and the response includes
- * a `followUp.command` the operator can run locally to finish the job.
+ * `dnsReady` needs both the catch-all and the MX records.
+ *
+ * When `CF_API_TOKEN` is absent or Cloudflare refuses a step, the domain is still
+ * allowlisted and `followUp` names the fix. Every step is idempotent, so rerunning
+ * after the fix is always safe.
  */
 api.post("/domains", async (c) => {
   const input = await body<{ domain: string }>(c);
   const domain = normalizeDomain(input.domain);
-  if (!domain) return c.json({ error: "invalid_domain" }, 400);
+  if (!domain) return c.json({ ok: false, error: "invalid_domain" }, 400);
 
-  const checks: Array<{ step: string; ok: boolean; detail?: string }> = [];
+  const checks: Check[] = [];
   let zoneName = domain;
-  let dnsReady = false;
+  let routed = false;
+  let mxReady = false;
 
   try {
     const zone = await findZone(c.env, domain);
     if (!zone) {
-      return c.json({ error: "zone_not_found", hint: "该域名不在此 Cloudflare 账号下" }, 400);
+      return c.json({ ok: false, error: "zone_not_found", hint: "No active zone in this Cloudflare account owns this domain. List them with: cloud-mail zones" }, 400);
     }
     zoneName = zone.name;
     checks.push({ step: "zone", ok: true, detail: zone.name });
@@ -130,14 +144,21 @@ api.post("/domains", async (c) => {
     // Step 3: Set catch-all → intake Worker
     try {
       await setCatchAll(c.env, zone);
-      dnsReady = true;
+      routed = true;
       checks.push({ step: "catch_all", ok: true, detail: "enabled -> cloud-mail-intake" });
     } catch (err) {
       const detail = err instanceof Error ? err.message : "unknown";
       checks.push({ step: "catch_all", ok: false, detail });
       // Still check current state — maybe it was already set.
       const catchAll = await getCatchAll(c.env, zone.id);
-      dnsReady = catchAll?.enabled === true && catchAll.target === "cloud-mail-intake";
+      routed = catchAll?.enabled === true && catchAll.target === "cloud-mail-intake";
+    }
+
+    try {
+      mxReady = await hasRoutingMx(domain);
+      checks.push({ step: "mx", ok: mxReady, detail: mxReady ? "route*.mx.cloudflare.net" : "no_cloudflare_mx" });
+    } catch (err) {
+      checks.push({ step: "mx", ok: false, detail: err instanceof Error ? err.message : "dns_lookup_failed" });
     }
   } catch (err) {
     // CF_API_TOKEN missing → graceful degradation.
@@ -150,9 +171,10 @@ api.post("/domains", async (c) => {
     checks.push({ step: "allowlist", ok: true });
   } catch (err) {
     checks.push({ step: "allowlist", ok: false, detail: err instanceof Error ? err.message : "unknown" });
-    return c.json({ error: "allowlist_failed", checks }, 502);
+    return c.json({ ok: false, error: "allowlist_failed", checks }, 502);
   }
 
+  const dnsReady = routed && mxReady;
   return c.json(
     {
       ok: true,
@@ -160,12 +182,7 @@ api.post("/domains", async (c) => {
       zone: zoneName,
       dnsReady,
       checks,
-      followUp: dnsReady
-        ? null
-        : {
-            reason: "自动配置未完成 — 可能缺少 CF_API_TOKEN 或权限不足",
-            command: "cd apps/intake && cloud-mail setup",
-          },
+      followUp: dnsReady ? null : followUpFor(domain, checks),
     },
     201,
   );
@@ -176,32 +193,39 @@ api.post("/domains", async (c) => {
  *
  * "No mail yet" and "mail cannot arrive" look identical in the message counts,
  * so read Email Routing directly. Without this a misrouted domain silently looks
- * like an idle one.
+ * like an idle one. `ready` also requires the intake allowlist to accept it.
  */
 api.get("/domains/:domain/health", async (c) => {
   const domain = normalizeDomain(c.req.param("domain"));
-  if (!domain) return c.json({ error: "invalid_domain" }, 400);
+  if (!domain) return c.json({ ok: false, error: "invalid_domain" }, 400);
 
+  const [routing, domains] = await Promise.all([routingHealth(c.env, domain), listDomains(c.env)]);
+  const allowlist = domains.find((entry) => entry.domain === domain);
+  return c.json({ domain, ...routing, ...readiness(routing.status, allowlist) });
+});
+
+async function routingHealth(env: Env, domain: string): Promise<{ status: RoutingStatus; zone?: string; detail: string }> {
   try {
-    const zone = await findZone(c.env, domain);
-    if (!zone) return c.json({ domain, status: "unknown", detail: "zone_not_found" });
+    const zone = await findZone(env, domain);
+    if (!zone) return { status: "unknown", detail: "zone_not_found" };
 
-    const catchAll = await getCatchAll(c.env, zone.id);
-    if (!catchAll) return c.json({ domain, status: "unrouted", zone: zone.name, detail: "not_configured" });
+    const catchAll = await getCatchAll(env, zone.id);
+    if (!catchAll) return { status: "unrouted", zone: zone.name, detail: "not_configured" };
 
     const routed = catchAll.enabled && catchAll.target === "cloud-mail-intake";
-    return c.json({
-      domain,
-      zone: zone.name,
-      status: routed ? "routed" : "unrouted",
-      detail: `${catchAll.enabled ? "enabled" : "disabled"} -> ${catchAll.target || "none"}`,
-    });
+    const rule = `${catchAll.enabled ? "enabled" : "disabled"} -> ${catchAll.target || "none"}`;
+    if (!routed) return { zone: zone.name, status: "unrouted", detail: rule };
+
+    const mx = await hasRoutingMx(domain).catch(() => null);
+    if (mx === null) return { zone: zone.name, status: "unknown", detail: `${rule}; dns_lookup_failed` };
+    return mx
+      ? { zone: zone.name, status: "routed", detail: rule }
+      : { zone: zone.name, status: "unrouted", detail: `${rule}; no_cloudflare_mx` };
   } catch (err) {
-    const message = err instanceof CloudflareError ? err.message : "cloudflare_error";
     // Cannot verify is not the same as broken; do not cry wolf.
-    return c.json({ domain, status: "unknown", detail: message });
+    return { status: "unknown", detail: err instanceof CloudflareError ? err.message : "cloudflare_error" };
   }
-});
+}
 
 api.get("/domains/:domain/mailboxes", async (c) => {
   const domain = normalizeDomain(c.req.param("domain"));

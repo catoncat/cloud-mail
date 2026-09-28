@@ -1,3 +1,4 @@
+import { isRoutingMx } from "./domains";
 import type { Env } from "./types";
 
 const API = "https://api.cloudflare.com/client/v4";
@@ -78,4 +79,20 @@ export async function setCatchAll(env: Env, zone: Zone, workerName = "cloud-mail
       actions: [{ type: "worker", value: [workerName] }],
     }),
   });
+}
+
+/**
+ * Whether public DNS sends mail for `domain` to Cloudflare Email Routing.
+ *
+ * Asks 1.1.1.1 over DoH, so it needs no token permission and sees what senders
+ * see. A zone catch-all alone is not enough: a subdomain without these MX records
+ * never receives mail.
+ */
+export async function hasRoutingMx(domain: string): Promise<boolean> {
+  const res = await fetch(`https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(domain)}&type=MX`, {
+    headers: { accept: "application/dns-json" },
+  });
+  if (!res.ok) throw new CloudflareError(`dns_lookup_http_${res.status}`);
+  const data = (await res.json()) as { Answer?: Array<{ type: number; data: string }> };
+  return (data.Answer ?? []).some((answer) => answer.type === 15 && isRoutingMx(answer.data));
 }

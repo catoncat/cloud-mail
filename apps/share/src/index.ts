@@ -19,6 +19,8 @@ app.use("*", async (c, next) => {
 
 app.route("/admin/api", api);
 app.route("/api/v1", service);
+// An unknown API path must answer JSON, not fall through to the SPA shell below.
+app.all("/admin/api/*", (c) => c.json({ error: "not_found" }, 404));
 
 /**
  * Retired service worker.

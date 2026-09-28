@@ -26,6 +26,10 @@ export type DomainHealth = {
   zone?: string;
   status: "routed" | "unrouted" | "unknown";
   detail?: string;
+  /** Intake allowlist state; mail lands only when `ready`. */
+  allowlisted?: boolean;
+  enabled?: boolean;
+  ready?: boolean;
 };
 
 export type LinkView = LinkRecord & { id: string; url: string; jsonUrl: string };

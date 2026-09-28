@@ -20,9 +20,12 @@ if (flags.has("--help") || flags.has("-h")) {
   --kv-title <title>         KV namespace title (default: <worker-name>-links)
   --skip-deploy              Configure everything but do not deploy
 
-Requires Cloudflare credentials in the environment (CLOUDFLARE_API_TOKEN, or
-CLOUDFLARE_EMAIL + CLOUDFLARE_GLOBAL_API_KEY), and a deployed intake Worker
-(share reaches it through the INTAKE Service Binding).`);
+Requires \`npx wrangler login\` (no local Cloudflare token), an account id
+(CLOUDFLARE_ACCOUNT_ID or account_id in wrangler.toml), and a deployed intake
+Worker (share reaches it through the INTAKE Service Binding).
+
+Generates OPERATOR_KEY and AUTOMATION_TOKEN once, uploads them, and keeps them in
+.secrets/cloud-mail.env at the repo root for the cloud-mail CLI.`);
   process.exit(0);
 }
 
@@ -52,10 +55,13 @@ console.log(`
   Admin page:  ${shareHost ? `https://${shareHost}/admin` : "<your share host>/admin"}
   Keys:        .secrets/cloud-mail.env at the repo root (mode 600, gitignored)
 
-Optional secret, upload only if you need it:
-  CF_API_TOKEN    lets the admin UI list zones and add mail domains itself
+Needed to add mail domains (cloud-mail domains add, or the admin UI):
+  CF_API_TOKEN    Cloudflare API token with Zone Read, Email Routing Rules Edit
+                  and Zone Settings Edit on the zones that receive mail
 
-    npx wrangler secret put CF_API_TOKEN`);
+    npx wrangler secret put CF_API_TOKEN
+
+Check: cloud-mail health && cloud-mail zones`);
 
 function valueAfter(name) {
   const index = args.indexOf(name);
