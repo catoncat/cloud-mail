@@ -1,3 +1,4 @@
+import { WorkerEntrypoint } from "cloudflare:workers";
 import PostalMime from "postal-mime";
 import { extractCode, extractLink, stripHtml } from "./extract";
 
@@ -13,7 +14,8 @@ interface RateLimiter {
 
 interface Env {
   DB: D1Database;
-  MAIL_ADMIN_TOKEN: string;
+  /** Only guards the public `/admin/*` surface; the internal entrypoint needs no token. */
+  MAIL_ADMIN_TOKEN?: string;
   MAX_RAW_BYTES?: string;
   RETENTION_HOURS?: string;
   /** Optional: absent on deployments whose wrangler config has no `ratelimits` entry. */
@@ -78,20 +80,22 @@ const CLEANUP_MAX_BATCHES = 20;
 const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 500;
 
+/**
+ * Internal entrypoint for the share Worker's Service Binding.
+ *
+ * Named entrypoints are unreachable from the internet — only a binding that names
+ * this class can call it — so the binding itself is the credential. Same JSON API
+ * as `/admin/*`, minus the token and the per-IP rate limit.
+ */
+export class InternalApi extends WorkerEntrypoint<Env> {
+  async fetch(request: Request): Promise<Response> {
+    return handle(request, this.env, { trusted: true });
+  }
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
-    // D1 and JSON parsing both throw. Without this the runtime turns any failure
-    // into an opaque 1101, so callers cannot tell a bug from a bad request.
-    try {
-      return await route(request, env);
-    } catch (error) {
-      console.error("request_failed", {
-        method: request.method,
-        path: new URL(request.url).pathname,
-        error: errorMessage(error),
-      });
-      return json({ ok: false, error: "internal_error" }, 500);
-    }
+    return handle(request, env, { trusted: false });
   },
 
   async email(message: ForwardableEmailMessage, env: Env): Promise<void> {
@@ -122,7 +126,23 @@ export default {
   },
 } satisfies ExportedHandler<Env>;
 
-async function route(request: Request, env: Env): Promise<Response> {
+async function handle(request: Request, env: Env, options: { trusted: boolean }): Promise<Response> {
+  // D1 and JSON parsing both throw. Without this the runtime turns any failure
+  // into an opaque 1101, so callers cannot tell a bug from a bad request.
+  try {
+    return await route(request, env, options);
+  } catch (error) {
+    console.error("request_failed", {
+      method: request.method,
+      path: new URL(request.url).pathname,
+      trusted: options.trusted,
+      error: errorMessage(error),
+    });
+    return json({ ok: false, error: "internal_error" }, 500);
+  }
+}
+
+async function route(request: Request, env: Env, { trusted }: { trusted: boolean }): Promise<Response> {
   const url = new URL(request.url);
 
   if (request.method === "GET" && (url.pathname === "/" || url.pathname === "/healthz")) {
@@ -133,12 +153,14 @@ async function route(request: Request, env: Env): Promise<Response> {
     return text("Not found", 404);
   }
 
-  // Before auth on purpose: this is what caps token guessing.
-  const rateLimited = await enforceRateLimit(request, env);
-  if (rateLimited) return rateLimited;
+  if (!trusted) {
+    // Before auth on purpose: this is what caps token guessing.
+    const rateLimited = await enforceRateLimit(request, env);
+    if (rateLimited) return rateLimited;
 
-  const authError = await requireAdmin(request, env);
-  if (authError) return authError;
+    const authError = await requireAdmin(request, env);
+    if (authError) return authError;
+  }
 
   if (request.method === "GET" && url.pathname === "/admin/domains") {
     return listDomains(env);
