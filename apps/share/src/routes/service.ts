@@ -1,10 +1,11 @@
 import { Hono } from "hono";
+import { requireSecret } from "../lib/auth";
 import { listDomains } from "../lib/intake";
 import * as store from "../lib/store";
 import type { Env } from "../lib/types";
 import { normalizeDomain } from "../lib/validate";
 
-/** Service API for automation clients. Auth is separate from the console key. */
+/** Service API for automation clients. Auth is separate from the operator key. */
 export const service = new Hono<{ Bindings: Env }>();
 
 const SERVICE_RE = /^[a-z0-9][a-z0-9._-]{1,38}[a-z0-9]$/i;
@@ -18,26 +19,7 @@ async function body<T extends object>(c: { req: { json: <U>() => Promise<U> } })
   }
 }
 
-async function constantTimeEqual(a: string, b: string): Promise<boolean> {
-  const enc = new TextEncoder();
-  const [x, y] = [enc.encode(a), enc.encode(b)];
-  if (x.length !== y.length) return false;
-  let diff = 0;
-  for (let i = 0; i < x.length; i++) diff |= x[i] ^ y[i];
-  return diff === 0;
-}
-
-service.use("*", async (c, next) => {
-  // Accept the dedicated service token, or fall back to the console key.
-  const expected = [c.env.SERVICE_TOKEN, c.env.ADMIN_KEY].filter((v): v is string => Boolean(v));
-  const header = c.req.header("authorization") ?? "";
-  const provided = /^Bearer\s+(.+)$/i.exec(header)?.[1]?.trim() ?? c.req.header("x-service-token") ?? "";
-  if (!provided) return c.json({ error: "unauthorized" }, 401);
-  for (const candidate of expected) {
-    if (await constantTimeEqual(candidate, provided)) return next();
-  }
-  return c.json({ error: "unauthorized" }, 401);
-});
+service.use("*", requireSecret("AUTOMATION_TOKEN"));
 
 /**
  * Claim domains for an automation run.

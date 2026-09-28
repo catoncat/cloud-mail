@@ -1,8 +1,10 @@
 import { Hono } from "hono";
 import { createAddress, AddressModelError, getAddressView, listAddressViews, updateAddress } from "../lib/addresses";
 import { domainStats, mailboxStats, overview } from "../lib/aggregate";
+import { requireSecret } from "../lib/auth";
 import {
   deleteMailboxMessages,
+  forwardToIntake,
   listDomains,
   messagesByDomain,
   messagesByMailbox,
@@ -15,15 +17,6 @@ import * as store from "../lib/store";
 import type { Env } from "../lib/types";
 import { createLinkId, isValidLinkId, normalizeDomain, normalizeMailbox, splitMailboxes } from "../lib/validate";
 
-async function timingSafeEqual(a: string, b: string): Promise<boolean> {
-  const enc = new TextEncoder();
-  const [x, y] = [enc.encode(a), enc.encode(b)];
-  if (x.length !== y.length) return false;
-  let diff = 0;
-  for (let i = 0; i < x.length; i++) diff |= x[i] ^ y[i];
-  return diff === 0;
-}
-
 /** Body parsing must never throw; missing fields are validated downstream. */
 async function body<T extends object>(c: { req: { json: <U>() => Promise<U> } }): Promise<Partial<T>> {
   try {
@@ -35,15 +28,10 @@ async function body<T extends object>(c: { req: { json: <U>() => Promise<U> } })
 
 export const api = new Hono<{ Bindings: Env }>();
 
-api.use("*", async (c, next) => {
-  const expected = c.env.ADMIN_KEY ?? "";
-  const header = c.req.header("authorization") ?? "";
-  const provided = /^Bearer\s+(.+)$/i.exec(header)?.[1]?.trim() ?? c.req.header("x-admin-key") ?? "";
-  if (!expected || !(await timingSafeEqual(expected, provided))) {
-    return c.json({ error: "unauthorized" }, 401);
-  }
-  await next();
-});
+api.use("*", requireSecret("OPERATOR_KEY"));
+
+/** Intake's own JSON API, relayed verbatim for the `cloud-mail` CLI. */
+api.all("/intake/*", (c) => forwardToIntake(c.env, c.req.raw, c.req.path.slice("/admin/api/intake".length)));
 
 api.get("/overview", async (c) => {
   const origin = new URL(c.req.url).origin;

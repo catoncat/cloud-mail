@@ -1,43 +1,94 @@
 import type { Env, IntakeMessage, LatestMessage, MailboxSummary } from "./types";
 
-function origin(env: Env): string {
-  const u = new URL(env.INTAKE_ORIGIN);
-  u.pathname = u.pathname.replace(/\/+$/, "");
-  u.search = "";
-  return u.toString();
+/** Service Bindings ignore the host; it only has to parse as a URL. */
+const INTAKE_BASE = "https://intake.internal";
+
+/**
+ * Intake did not answer with success.
+ *
+ * Thrown rather than mapped to an empty result: an outage that renders as
+ * "no mail yet" is the one failure an operator cannot see.
+ */
+export class IntakeError extends Error {
+  readonly status: number;
+  readonly code: string;
+
+  constructor(status: number, code: string) {
+    super(`intake ${status}: ${code}`);
+    this.name = "IntakeError";
+    this.status = status;
+    this.code = code;
+  }
 }
 
-async function call<T>(env: Env, path: string, params: Record<string, string>): Promise<T | null> {
-  const url = new URL(path, origin(env));
+async function request<T>(
+  env: Env,
+  method: string,
+  path: string,
+  { params = {}, body }: { params?: Record<string, string>; body?: unknown } = {},
+): Promise<T> {
+  const url = new URL(path, INTAKE_BASE);
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
-  const res = await fetch(url.toString(), {
-    headers: { accept: "application/json", authorization: `Bearer ${env.MAIL_INTAKE_ADMIN_TOKEN}` },
+  const res = await env.INTAKE.fetch(url.toString(), {
+    method,
+    headers: body === undefined ? { accept: "application/json" } : { accept: "application/json", "content-type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
   });
-  if (!res.ok) return null;
   const text = await res.text();
+  let parsed: ({ ok?: boolean; error?: string } & T) | null = null;
   try {
-    const parsed = JSON.parse(text) as { ok?: boolean } & T;
-    return parsed.ok === false ? null : parsed;
+    parsed = JSON.parse(text);
   } catch {
-    return null;
+    // Non-JSON is handled as a failure below.
   }
+  if (!res.ok || !parsed || parsed.ok === false) {
+    throw new IntakeError(res.status, parsed?.error ?? (text.trim().slice(0, 80) || "invalid_response"));
+  }
+  return parsed;
+}
+
+function call<T>(env: Env, path: string, params: Record<string, string>): Promise<T> {
+  return request<T>(env, "GET", path, { params });
+}
+
+/**
+ * Raw pass-through for the `cloud-mail` CLI: `/admin/api/intake<path>` → intake `<path>`.
+ *
+ * Status and body are relayed untouched so CLI output stays identical to the old
+ * direct-to-intake calls, which other tools parse. The caller's Authorization
+ * header is deliberately not forwarded; the binding is intake's credential.
+ */
+export async function forwardToIntake(env: Env, incoming: Request, path: string): Promise<Response> {
+  const target = new URL(INTAKE_BASE);
+  target.pathname = path || "/";
+  target.search = new URL(incoming.url).search;
+  const hasBody = incoming.method !== "GET" && incoming.method !== "HEAD";
+  const res = await env.INTAKE.fetch(target.toString(), {
+    method: incoming.method,
+    headers: { accept: "application/json", "content-type": incoming.headers.get("content-type") ?? "application/json" },
+    body: hasBody ? await incoming.arrayBuffer() : undefined,
+  });
+  return new Response(res.body, {
+    status: res.status,
+    headers: { "content-type": res.headers.get("content-type") ?? "application/json" },
+  });
 }
 
 export async function listDomains(env: Env): Promise<Array<{ domain: string; enabled: boolean }>> {
   const data = await call<{ items?: Array<{ domain?: string; enabled?: number | boolean }> }>(env, "/admin/domains", {});
-  return (data?.items ?? [])
+  return (data.items ?? [])
     .map((i) => ({ domain: String(i.domain ?? "").toLowerCase(), enabled: Boolean(i.enabled) }))
     .filter((i) => i.domain);
 }
 
 export async function messagesByDomain(env: Env, domain: string, limit = 500): Promise<IntakeMessage[]> {
   const data = await call<{ items?: IntakeMessage[] }>(env, "/admin/messages", { domain, limit: String(limit) });
-  return data?.items ?? [];
+  return data.items ?? [];
 }
 
 export async function recentMessages(env: Env, limit = 50): Promise<IntakeMessage[]> {
   const data = await call<{ items?: IntakeMessage[] }>(env, "/admin/recent-messages", { limit: String(limit) });
-  return data?.items ?? [];
+  return data.items ?? [];
 }
 
 export async function mailboxSummaries(env: Env, limit = 1000): Promise<MailboxSummary[]> {
@@ -56,7 +107,7 @@ export async function mailboxSummaries(env: Env, limit = 1000): Promise<MailboxS
     }>;
   }>(env, "/admin/mailboxes", { limit: String(limit) });
 
-  return (data?.items ?? []).flatMap((row) => {
+  return (data.items ?? []).flatMap((row) => {
     const mailbox = String(row.recipient ?? "").toLowerCase();
     const domain = String(row.domain ?? "").toLowerCase();
     if (!mailbox || !domain) return [];
@@ -105,7 +156,7 @@ export async function domainCounters(env: Env): Promise<Map<string, DomainCounte
   }>(env, "/admin/stats", {});
 
   const out = new Map<string, DomainCounters>();
-  for (const row of data?.items ?? []) {
+  for (const row of data.items ?? []) {
     const domain = String(row.domain ?? "").toLowerCase();
     if (!domain) continue;
     out.set(domain, {
@@ -123,18 +174,11 @@ export async function domainCounters(env: Env): Promise<Map<string, DomainCounte
 
 export async function messagesByMailbox(env: Env, email: string, limit = 1): Promise<IntakeMessage[]> {
   const data = await call<{ items?: IntakeMessage[] }>(env, "/admin/messages", { email, limit: String(limit) });
-  return data?.items ?? [];
+  return data.items ?? [];
 }
 
 export async function deleteMailboxMessages(env: Env, email: string): Promise<number> {
-  const url = new URL("/admin/messages", origin(env));
-  url.searchParams.set("email", email);
-  const res = await fetch(url.toString(), {
-    method: "DELETE",
-    headers: { accept: "application/json", authorization: `Bearer ${env.MAIL_INTAKE_ADMIN_TOKEN}` },
-  });
-  if (!res.ok) throw new Error(`intake_delete_failed_${res.status}`);
-  const data = await res.json<{ changes?: number }>();
+  const data = await request<{ changes?: number }>(env, "DELETE", "/admin/messages", { params: { email } });
   return Number(data.changes ?? 0);
 }
 
@@ -213,11 +257,5 @@ export function toLatest(item: IntakeMessage, mailbox: string): LatestMessage {
 
 /** Register a recipient domain in the intake allowlist. */
 export async function upsertIntakeDomain(env: Env, domain: string, zone: string): Promise<void> {
-  const url = new URL("/admin/domains", origin(env));
-  const res = await fetch(url.toString(), {
-    method: "POST",
-    headers: { "content-type": "application/json", authorization: `Bearer ${env.MAIL_INTAKE_ADMIN_TOKEN}` },
-    body: JSON.stringify({ domain, zone, enabled: true }),
-  });
-  if (!res.ok) throw new Error(`intake_upsert_failed_${res.status}`);
+  await request(env, "POST", "/admin/domains", { body: { domain, zone, enabled: true } });
 }

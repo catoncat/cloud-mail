@@ -6,7 +6,7 @@ import type { DomainStat, Env, IntakeMessage, MailboxStat, Overview } from "./ty
 export async function domainStats(env: Env): Promise<DomainStat[]> {
   const [domains, counters] = await Promise.all([
     listDomains(env),
-    domainCounters(env).catch(() => new Map()),
+    domainCounters(env),
   ]);
 
   const stats = domains.map(({ domain, enabled }) => {
@@ -26,7 +26,7 @@ export async function domainStats(env: Env): Promise<DomainStat[]> {
 
 export async function mailboxStats(env: Env, domain: string, origin: string): Promise<MailboxStat[]> {
   const [messages, shared] = await Promise.all([
-    messagesByDomain(env, domain).catch(() => [] as IntakeMessage[]),
+    messagesByDomain(env, domain),
     shareUrlByMailbox(env, origin),
   ]);
 
@@ -61,7 +61,7 @@ export async function mailboxStats(env: Env, domain: string, origin: string): Pr
 export async function overview(env: Env, origin: string, links: number): Promise<Overview> {
   const [domains, counters] = await Promise.all([
     domainStats(env),
-    domainCounters(env).catch(() => new Map()),
+    domainCounters(env),
   ]);
   const withMail = domains.filter((d) => d.mailboxes > 0);
 

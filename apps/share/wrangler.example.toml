@@ -1,10 +1,10 @@
 # Copy to wrangler.toml, or let `npm run setup` generate and fill it for you.
 #
-# Secrets are not stored here. Upload them with `wrangler secret put <NAME>`:
-#   ADMIN_KEY                operator console key (setup generates one)
-#   MAIL_INTAKE_ADMIN_TOKEN  intake's admin token, so this Worker can read mail
-#   CF_API_TOKEN             optional; lets the admin UI list zones / add domains
-#   SERVICE_TOKEN            optional; separate auth for the /api/v1 surface
+# Secrets are not stored here. `npm run setup` generates the first two into
+# ../../.secrets/cloud-mail.env and uploads them with `wrangler secret put`:
+#   OPERATOR_KEY      operator console + cloud-mail CLI (/admin/api/*)
+#   AUTOMATION_TOKEN  automation clients (/api/v1/*)
+#   CF_API_TOKEN      optional; lets the admin UI list zones / add domains
 
 name = "cloud-mail-share"
 account_id = "REPLACE_WITH_ACCOUNT_ID"
@@ -22,6 +22,11 @@ kv_namespaces = [
   { binding = "SHARE_LINKS", id = "REPLACE_WITH_KV_NAMESPACE_ID" }
 ]
 
+# Mail is read through intake's internal entrypoint: no token, no public hop.
+services = [
+  { binding = "INTAKE", service = "cloud-mail-intake", entrypoint = "InternalApi" }
+]
+
 [assets]
 directory = "./dist"
 binding = "ASSETS"
@@ -29,9 +34,6 @@ binding = "ASSETS"
 run_worker_first = true
 not_found_handling = "none"
 html_handling = "none"
-
-[vars]
-INTAKE_ORIGIN = "https://mail.example.com"
 
 [observability]
 enabled = true

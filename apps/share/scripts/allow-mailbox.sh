@@ -26,36 +26,30 @@ if [[ ! "$mailbox" =~ ^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$ ]]; then
 fi
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-credentials_file="${CLOUD_MAIL_SHARE_CREDENTIALS:-$script_dir/../.secrets/share-admin.credentials}"
+secrets_file="${CLOUD_MAIL_SECRETS:-$script_dir/../../../.secrets/cloud-mail.env}"
 
-if [[ ! -f "$credentials_file" ]]; then
-  echo "Missing credentials file: $credentials_file" >&2
-  echo "Set CLOUD_MAIL_SHARE_CREDENTIALS to override." >&2
+if [[ ! -f "$secrets_file" ]]; then
+  echo "Missing secrets file: $secrets_file (run: npm run setup)" >&2
+  echo "Set CLOUD_MAIL_SECRETS to override." >&2
   exit 1
 fi
 
-admin_key="$(sed -n 's/^CLOUD_MAIL_SHARE_ADMIN_KEY=//p' "$credentials_file")"
+operator_key="$(sed -n 's/^OPERATOR_KEY=//p' "$secrets_file")"
+origin="$(sed -n 's/^CLOUD_MAIL_ORIGIN=//p' "$secrets_file")"
 
-if [[ -z "$admin_key" ]]; then
-  echo "Missing CLOUD_MAIL_SHARE_ADMIN_KEY in $credentials_file" >&2
-  exit 1
-fi
-
-origin="${CLOUD_MAIL_SHARE_ORIGIN:-$(sed -n 's/^CLOUD_MAIL_SHARE_ORIGIN=//p' "$credentials_file")}"
-
-if [[ -z "$origin" ]]; then
-  echo "Missing share origin. Set CLOUD_MAIL_SHARE_ORIGIN or add it to $credentials_file" >&2
+if [[ -z "$operator_key" || -z "$origin" ]]; then
+  echo "OPERATOR_KEY and CLOUD_MAIL_ORIGIN are required in $secrets_file" >&2
   exit 1
 fi
 origin="${origin%/}"
 if [[ "$mode" == "link" ]]; then
-  curl -fsS -X POST "$origin/admin/api/links" \
-    -H "Authorization: Bearer ${admin_key}" \
+  printf 'Authorization: Bearer %s\n' "$operator_key" | curl -fsS -X POST "$origin/admin/api/links" \
+    -H @- \
     -H "content-type: application/json" \
     --data "{\"mailbox\":\"${mailbox}\"}"
 else
-  curl -fsS -X POST "$origin/admin/api/mailboxes" \
-    -H "Authorization: Bearer ${admin_key}" \
+  printf 'Authorization: Bearer %s\n' "$operator_key" | curl -fsS -X POST "$origin/admin/api/mailboxes" \
+    -H @- \
     -H "content-type: application/json" \
     --data "{\"mailbox\":\"${mailbox}\"}"
 fi

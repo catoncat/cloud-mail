@@ -3,12 +3,13 @@ import { cors } from "hono/cors";
 import { api } from "./routes/api";
 import { publicRoutes } from "./routes/public";
 import { service } from "./routes/service";
+import { IntakeError } from "./lib/intake";
 import type { Env } from "./lib/types";
 
 const app = new Hono<{ Bindings: Env }>();
 
-app.use("/api/v1/*", cors({ origin: "*", allowHeaders: ["authorization", "content-type", "x-service-token"], allowMethods: ["GET", "POST", "OPTIONS"] }));
-app.use("/admin/api/*", cors({ origin: "*", allowHeaders: ["authorization", "content-type", "x-admin-key"], allowMethods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"] }));
+app.use("/api/v1/*", cors({ origin: "*", allowHeaders: ["authorization", "content-type"], allowMethods: ["GET", "POST", "OPTIONS"] }));
+app.use("/admin/api/*", cors({ origin: "*", allowHeaders: ["authorization", "content-type"], allowMethods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"] }));
 
 app.use("*", async (c, next) => {
   await next();
@@ -89,6 +90,7 @@ app.route("/", publicRoutes);
 app.notFound((c) => c.json({ error: "not_found" }, 404));
 app.onError((err, c) => {
   console.error(JSON.stringify({ level: "error", message: err.message }));
+  if (err instanceof IntakeError) return c.json({ error: "intake_unavailable", detail: err.code }, 502);
   return c.json({ error: "internal_error" }, 500);
 });
 

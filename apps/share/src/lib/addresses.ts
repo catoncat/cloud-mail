@@ -176,7 +176,7 @@ export async function getAddressView(env: Env, origin: string, mailboxInput: unk
     store.getAddress(env, mailbox),
     store.listLinks(env, origin),
     store.listPublicMailboxes(env),
-    mailboxSummaries(env).catch(() => [] as MailboxSummary[]),
+    mailboxSummaries(env),
   ]);
   const summary = summaries.find((item) => item.mailbox === mailbox);
   const shares = links.filter((link) => link.mailbox === mailbox);

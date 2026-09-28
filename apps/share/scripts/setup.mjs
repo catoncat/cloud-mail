@@ -2,13 +2,13 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { execFileSync, spawnSync } from "node:child_process";
+import { dirname } from "node:path";
 
 const args = process.argv.slice(2);
 const flags = new Set(args);
 const skipDeploy = flags.has("--skip-deploy");
 
 const shareHost = valueAfter("--host");
-const intakeOrigin = valueAfter("--intake-origin");
 const workerName = valueAfter("--name") ?? "cloud-mail-share";
 const kvTitle = valueAfter("--kv-title") ?? `${workerName}-links`;
 
@@ -16,28 +16,30 @@ if (flags.has("--help") || flags.has("-h")) {
   console.log(`Usage: node scripts/setup.mjs [options]
 
   --host <domain>            Custom domain for the share UI, e.g. inbox.example.com
-  --intake-origin <url>      Intake Worker origin, e.g. https://mail.example.com
   --name <worker-name>       Worker name (default: cloud-mail-share)
   --kv-title <title>         KV namespace title (default: <worker-name>-links)
   --skip-deploy              Configure everything but do not deploy
 
 Requires Cloudflare credentials in the environment (CLOUDFLARE_API_TOKEN, or
-CLOUDFLARE_EMAIL + CLOUDFLARE_GLOBAL_API_KEY), and a deployed intake Worker.`);
+CLOUDFLARE_EMAIL + CLOUDFLARE_GLOBAL_API_KEY), and a deployed intake Worker
+(share reaches it through the INTAKE Service Binding).`);
   process.exit(0);
 }
 
-mkdirSync(".secrets", { recursive: true });
+/** Single local secrets file for the whole project; the CLI reads it too. */
+const SECRETS_FILE = "../../.secrets/cloud-mail.env";
+const LEGACY_CREDENTIALS = ".secrets/share-admin.credentials";
+
 ensureWranglerConfig();
 await ensureDependencies();
 
 const accountId = resolveAccountId();
 const kvId = ensureKvNamespace(kvTitle);
-const origin = resolveIntakeOrigin();
-updateWrangler({ accountId, kvId, origin, workerName, shareHost });
+updateWrangler({ accountId, kvId, workerName, shareHost });
 
-const adminKey = ensureAdminKey();
-putSecret("ADMIN_KEY", adminKey);
-putSecret("MAIL_INTAKE_ADMIN_TOKEN", resolveIntakeToken());
+const secrets = ensureSecrets();
+putSecret("OPERATOR_KEY", secrets.OPERATOR_KEY);
+putSecret("AUTOMATION_TOKEN", secrets.AUTOMATION_TOKEN);
 
 run("npm", ["run", "build"]);
 
@@ -49,11 +51,10 @@ console.log(`
 [done] share UI configured.
 
   Admin page:  ${shareHost ? `https://${shareHost}/admin` : "<your share host>/admin"}
-  Admin key:   .secrets/share-admin.credentials (mode 600, gitignored)
+  Keys:        .secrets/cloud-mail.env at the repo root (mode 600, gitignored)
 
-Optional secrets, upload only if you need them:
+Optional secret, upload only if you need it:
   CF_API_TOKEN    lets the admin UI list zones and add mail domains itself
-  SERVICE_TOKEN   separate auth for the /api/v1 automation surface
 
     npx wrangler secret put CF_API_TOKEN`);
 
@@ -89,48 +90,46 @@ async function ensureDependencies() {
   run("npm", ["install"]);
 }
 
-/** The admin key authenticates the operator console; it is not the intake token. */
-function ensureAdminKey() {
-  const path = ".secrets/share-admin.credentials";
-  if (existsSync(path)) {
-    const existing = /^CLOUD_MAIL_SHARE_ADMIN_KEY=(.+)$/mu.exec(readFileSync(path, "utf8"));
-    if (existing) {
-      console.log("[ok] reusing existing admin key");
-      return existing[1].trim();
+/**
+ * OPERATOR_KEY and AUTOMATION_TOKEN, generated once and reused on every run.
+ *
+ * The first run adopts the legacy console key as OPERATOR_KEY so browsers that
+ * already saved it stay logged in.
+ */
+function ensureSecrets() {
+  const values = existsSync(SECRETS_FILE) ? parseEnv(readFileSync(SECRETS_FILE, "utf8")) : {};
+  if (!values.OPERATOR_KEY && existsSync(LEGACY_CREDENTIALS)) {
+    const legacy = parseEnv(readFileSync(LEGACY_CREDENTIALS, "utf8"));
+    if (legacy.CLOUD_MAIL_SHARE_ADMIN_KEY) {
+      values.OPERATOR_KEY = legacy.CLOUD_MAIL_SHARE_ADMIN_KEY;
+      values.CLOUD_MAIL_ORIGIN ||= legacy.CLOUD_MAIL_SHARE_ORIGIN;
+      console.log(`[ok] adopted ${LEGACY_CREDENTIALS} as OPERATOR_KEY`);
     }
   }
-  const key = randomBytes(32).toString("base64url");
-  const originLine = shareHost ? `CLOUD_MAIL_SHARE_ORIGIN=https://${shareHost}\n` : "";
-  writeFileSync(path, `CLOUD_MAIL_SHARE_ADMIN_KEY=${key}\n${originLine}`, { mode: 0o600 });
-  console.log(`[ok] generated ${path}`);
-  return key;
+  values.OPERATOR_KEY ||= randomBytes(32).toString("base64url");
+  values.AUTOMATION_TOKEN ||= randomBytes(32).toString("base64url");
+  if (shareHost) values.CLOUD_MAIL_ORIGIN = `https://${shareHost}`;
+
+  const body = ["CLOUD_MAIL_ORIGIN", "OPERATOR_KEY", "AUTOMATION_TOKEN"]
+    .filter((name) => values[name])
+    .map((name) => `${name}=${values[name]}\n`)
+    .join("");
+  mkdirSync(dirname(SECRETS_FILE), { recursive: true });
+  writeFileSync(SECRETS_FILE, body, { mode: 0o600 });
+  console.log(`[ok] wrote ${SECRETS_FILE}`);
+  if (!values.CLOUD_MAIL_ORIGIN) {
+    console.log("[warn] no CLOUD_MAIL_ORIGIN yet; rerun with --host so the CLI knows where share lives");
+  }
+  return values;
 }
 
-/** The share Worker reads mail through intake, so it needs intake's admin token. */
-function resolveIntakeToken() {
-  if (process.env.MAIL_INTAKE_ADMIN_TOKEN) return process.env.MAIL_INTAKE_ADMIN_TOKEN.trim();
-  const intakeToken = "../intake/.secrets/mail-admin-token.txt";
-  if (existsSync(intakeToken)) {
-    console.log("[ok] read intake admin token from apps/intake/.secrets");
-    return readFileSync(intakeToken, "utf8").trim();
-  }
-  throw new Error(
-    "Cannot find the intake admin token. Run `cloud-mail setup` in apps/intake first, " +
-      "or set MAIL_INTAKE_ADMIN_TOKEN in the environment.",
+function parseEnv(text) {
+  return Object.fromEntries(
+    text.split("\n").flatMap((line) => {
+      const match = /^([A-Z0-9_]+)=(.*)$/u.exec(line.trim());
+      return match ? [[match[1], match[2].trim()]] : [];
+    }),
   );
-}
-
-function resolveIntakeOrigin() {
-  if (intakeOrigin) return intakeOrigin.replace(/\/+$/u, "");
-  const configPath = "../intake/config/domains.json";
-  if (existsSync(configPath)) {
-    const apiHost = JSON.parse(readFileSync(configPath, "utf8")).api_host;
-    if (apiHost) {
-      console.log(`[ok] intake origin from apps/intake config: ${apiHost}`);
-      return `https://${apiHost}`;
-    }
-  }
-  throw new Error("Missing --intake-origin and could not read it from apps/intake/config/domains.json");
 }
 
 function resolveAccountId() {
@@ -154,12 +153,11 @@ function ensureKvNamespace(title) {
   return match[1];
 }
 
-function updateWrangler({ accountId, kvId, origin, workerName: name, shareHost: host }) {
+function updateWrangler({ accountId, kvId, workerName: name, shareHost: host }) {
   let text = readFileSync("wrangler.toml", "utf8");
   text = text.replace(/^name\s*=\s*"[^"]*"/mu, `name = "${name}"`);
   text = text.replace(/^account_id\s*=\s*"[^"]*"/mu, `account_id = "${accountId}"`);
   text = text.replace(/id = "[^"]*" \}/u, `id = "${kvId}" }`);
-  text = text.replace(/^INTAKE_ORIGIN\s*=\s*"[^"]*"/mu, `INTAKE_ORIGIN = "${origin}"`);
   if (host) {
     // Drop the placeholder route carried over from wrangler.example.toml.
     text = text.replace(/^\s*\{ pattern = "inbox\.example\.com".*\},?\n/mu, "");

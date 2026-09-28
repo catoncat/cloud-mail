@@ -1,8 +1,10 @@
 export interface Env {
-  INTAKE_ORIGIN: string;
-  MAIL_INTAKE_ADMIN_TOKEN: string;
-  ADMIN_KEY?: string;
-  SERVICE_TOKEN?: string;
+  /** Service Binding to intake's `InternalApi` entrypoint. */
+  INTAKE: Fetcher;
+  /** Operator console and `cloud-mail` CLI (`/admin/api/*`). */
+  OPERATOR_KEY?: string;
+  /** Automation clients (`/api/v1/*`). */
+  AUTOMATION_TOKEN?: string;
   CF_API_TOKEN?: string;
   SHARE_LINKS: KVNamespace;
   ASSETS: Fetcher;
