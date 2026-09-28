@@ -144,6 +144,32 @@ sed -n 's/^OPERATOR_KEY=/Authorization: Bearer /p' "$secrets" |
 Link responses include `url` and `jsonUrl`. CSV is available by appending `?format=csv`
 to either URL; it returns the latest message only, as one row.
 
+## Automation API (`/api/v1`)
+
+For agents and scripts that do not have this repo, such as an agent on a remote server.
+It takes only `AUTOMATION_TOKEN` and is receive-only. `GET /api/v1/help` is public,
+serves the full usage as markdown with the caller's own origin in every example, and
+is the reference; the table below is a summary.
+
+| Endpoint | Does |
+| --- | --- |
+| `GET /api/v1/help` | usage for agents; no key, contains no key |
+| `POST /api/v1/addresses` | random address on an enabled domain; optional body `{"domain":"D"}` |
+| `GET /api/v1/code?email=&since=&wait=` | newest code received after `since`; `wait` (≤ 60 s) holds the request until one lands |
+| `GET /api/v1/link?email=&since=&wait=` | same, for magic links |
+| `GET /api/v1/messages?email=&since=&limit=` | full stored mail for one address, newest first |
+| `GET /api/v1/domains` | domains that receive mail |
+| `POST /api/v1/domains/claim` | record which service is using which domains (attribution only) |
+
+Answers are agent-shaped:
+
+- "Nothing yet" is HTTP 200 with `{"ok":false,"error":"no_code_found"}`, not an error.
+- Bad input is a 400 with `error` and a `hint` that says what to change. An address on a domain that is not enabled fails at once instead of waiting out `wait`.
+- A 401 and an unknown path both point back to `/api/v1/help`.
+
+The token cannot delete mail, touch domains or Cloudflare, list a domain's mailboxes,
+or reach `/admin/api/*`.
+
 ## Deployment
 
 Deploy `apps/intake` first — this Worker reads mail through it. Needs only
@@ -162,7 +188,7 @@ Service Binding), generates `OPERATOR_KEY` and `AUTOMATION_TOKEN` into the repo-
 | Secret | Guards | Uploaded by setup |
 | --- | --- | --- |
 | `OPERATOR_KEY` | `/admin/api/*` — console and `cloud-mail` CLI | yes |
-| `AUTOMATION_TOKEN` | `/api/v1/*` — automation clients | yes |
+| `AUTOMATION_TOKEN` | `/api/v1/*` — remote agents and automation, receive-only | yes |
 | `CF_API_TOKEN` | Cloudflare API calls for adding and checking domains. Needs Zone Read, Zone Settings Edit, and Email Routing Rules Edit on the mail zones. Without it, `domains add` only allowlists and answers `followUp.reason: cloudflare_token_missing` | no |
 
 Each surface accepts only its own key, as `Authorization: Bearer <key>`. An unset key

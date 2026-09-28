@@ -1,6 +1,6 @@
 ---
 name: cloud-mail-intake
-description: Use this skill whenever the user or task needs a throwaway or account email address on the user's own domains and has to read what arrives there — verification codes (OTP), magic links, full inbound mail — or wants to share one inbox with a person, add or check a mail domain, or operate the cloud-mail Workers (cloudflare email routing, receive-only, inbox.0day3.com, cloud-mail CLI).
+description: Use this skill whenever the user or task needs a throwaway or account email address on the user's own domains and has to read what arrives there — verification codes (OTP), magic links, full inbound mail — or wants to share one inbox with a person, give a remote agent receive-only access, add or check a mail domain, or operate the cloud-mail Workers (cloudflare email routing, receive-only, inbox.0day3.com, cloud-mail CLI).
 disable-model-invocation: true
 ---
 
@@ -10,6 +10,8 @@ Receive-only mail on the user's own domains. Do everything through the `cloud-ma
 CLI. It reads the keys itself, so you never read, print, or pass a key.
 
 If `cloud-mail` is not on PATH, use `node <repo>/apps/intake/scripts/cli.mjs`.
+With no repo here but `CLOUD_MAIL_TOKEN` set (a remote host), use the HTTP API instead:
+`curl -s "$CLOUD_MAIL_URL/api/v1/help"` explains it, and its answers have the same shapes.
 
 ## Contract
 
@@ -67,6 +69,22 @@ Nothing fresh within the wait (still exit `0`):
 | Zones that can take domains | `cloud-mail zones` | `.zones[].name` |
 | End-to-end health | `cloud-mail health` | `.ok` |
 
+## Give a remote agent access
+
+An agent on another machine needs no code: the share URL, `AUTOMATION_TOKEN`, and curl.
+That token is receive-only. It can create addresses and read their mail, but cannot
+delete mail, change domains, or open the console. Never give out `OPERATOR_KEY`.
+
+1. Put the token on the remote host as a file or env var without printing it:
+   `sed -n 's/^AUTOMATION_TOKEN=//p' "$(cloud-mail keys-path)" | ssh HOST 'umask 077; cat > ~/.cloud-mail-token'`
+   then have its environment export `CLOUD_MAIL_TOKEN="$(cat ~/.cloud-mail-token)"` and `CLOUD_MAIL_URL=<origin>`.
+2. Tell the remote agent only: "Receive email with `$CLOUD_MAIL_URL`; read `$CLOUD_MAIL_URL/api/v1/help` first."
+   Do not paste the token into its prompt or chat; those end up in logs.
+3. Check from the remote side: `curl -s -H "Authorization: Bearer $CLOUD_MAIL_TOKEN" "$CLOUD_MAIL_URL/api/v1/domains"` lists domains.
+
+Rotating `AUTOMATION_TOKEN` (`cd apps/share && npx wrangler secret put AUTOMATION_TOKEN`, then
+update the keys file) cuts off every holder at once. Ask the user first.
+
 ## Add a mail domain
 
 Adding a domain changes Cloudflare DNS and Email Routing, so confirm with the user first.
@@ -113,7 +131,7 @@ Never print a key: not in chat, commits, PR text, logs, or command arguments.
 | Key | Surface | Where it lives |
 | --- | --- | --- |
 | `OPERATOR_KEY` | `/admin/api/*`: admin PWA and this CLI | share secret + `.secrets/cloud-mail.env` |
-| `AUTOMATION_TOKEN` | `/api/v1/*`: automation clients | share secret + `.secrets/cloud-mail.env` |
+| `AUTOMATION_TOKEN` | `/api/v1/*`: remote agents and automation, receive-only | share secret + `.secrets/cloud-mail.env` |
 | `CF_API_TOKEN` | share's own Cloudflare API calls | share secret only |
 
 - The keys file is `<repo>/.secrets/cloud-mail.env` (mode 600, gitignored). `cloud-mail keys-path` prints its path. `CLOUD_MAIL_SECRETS` overrides it.
@@ -134,7 +152,7 @@ Never print a key: not in chat, commits, PR text, logs, or command arguments.
 
 ```
 cloud-mail / PWA ── OPERATOR_KEY ──▶ share (CLOUD_MAIL_ORIGIN) ──Service Binding──▶ intake ──▶ D1
-automation ──── AUTOMATION_TOKEN ──▶ share /api/v1                  Email Routing catch-all ──▶ intake
+remote agent ── AUTOMATION_TOKEN ──▶ share /api/v1                  Email Routing catch-all ──▶ intake
 ```
 
 - Intake has no public URL. The CLI reaches intake's API through share's `/admin/api/intake/*` relay, so responses are exactly intake's.

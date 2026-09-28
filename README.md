@@ -7,14 +7,17 @@ Built for three audiences at once:
 
 | Role | Surface | Entry point |
 | --- | --- | --- |
-| **Agent** | CLI + skill (JSON out, stable exit codes) | `cloud-mail` CLI, `skills/cloud-mail-intake/SKILL.md` |
+| **Agent** | CLI + skill (JSON out, stable exit codes), or plain HTTP with no repo | `cloud-mail` CLI, `skills/cloud-mail-intake/SKILL.md`, `https://inbox.example.com/api/v1/help` |
 | **Operator** (you) | Admin PWA — domains, mailboxes, inbox, services | `https://inbox.example.com` |
 | **Recipient** (teammate / end user) | Single shareable OTP inbox link, no login | `https://inbox.example.com/s/<token>` |
 
 ## For agents
 
-Most callers are agents. Everything an agent needs is one CLI that prints JSON and
-never asks it to handle a key:
+Most callers are agents. There are two ways in, depending on where the agent runs.
+
+### On this machine: the CLI
+
+One CLI that prints JSON and never asks the agent to handle a key:
 
 ```bash
 email=$(cloud-mail new-address | jq -r .email)            # random address on an enabled domain
@@ -26,6 +29,23 @@ cloud-mail links create --email "$email" | jq -r .url     # hand the inbox to a 
 Exit `0` means answered (read `.ok`), `1` failed (reason on stderr), `2` bad usage.
 `cloud-mail help` lists every command with its output shape; the skill in
 `skills/cloud-mail-intake/SKILL.md` is the full playbook.
+
+### Anywhere else: HTTP, no repo
+
+A remote agent needs no code: only the share URL, the `AUTOMATION_TOKEN`, and curl.
+The API documents itself, so point the agent at the help page:
+
+```bash
+curl -s https://inbox.example.com/api/v1/help                  # public, no key; markdown usage
+auth="Authorization: Bearer $CLOUD_MAIL_TOKEN"
+email=$(curl -s -X POST -H "$auth" https://inbox.example.com/api/v1/addresses | jq -r .email)
+curl -s -H "$auth" "https://inbox.example.com/api/v1/code?email=$email&since=$since&wait=60"
+```
+
+That token can create addresses and read their mail, nothing else: it cannot delete
+mail, change domains, or open the console. Put it on the remote host as an environment
+variable (for example `CLOUD_MAIL_TOKEN`), not in the agent's prompt, which ends up
+in logs.
 
 ## What it's for
 
@@ -122,7 +142,7 @@ Three secrets, all on the share Worker:
 | Secret | Who uses it | Where |
 | --- | --- | --- |
 | `OPERATOR_KEY` | admin PWA, `cloud-mail` CLI | `/admin/api/*` |
-| `AUTOMATION_TOKEN` | automation clients | `/api/v1/*` |
+| `AUTOMATION_TOKEN` | remote agents and automation: receive-only (addresses, codes, links, messages) | `/api/v1/*` |
 | `CF_API_TOKEN` | share itself, to route new domains (Zone Read, Zone Settings Edit, Email Routing Rules Edit) | Cloudflare API |
 
 Intake needs no secret and has no public URL: share reaches it through a Service
