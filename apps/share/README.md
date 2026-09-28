@@ -40,10 +40,10 @@ https://inbox.example.com/s/<random-link-id>
 https://inbox.example.com/s/<random-link-id>?format=json
 ```
 
-Create with admin API or:
+Create one with the CLI (see [Share A Mailbox](#share-a-mailbox)):
 
 ```bash
-scripts/allow-mailbox.sh --link name@mailbox.example.com
+cloud-mail links create --email name@mailbox.example.com
 ```
 
 The page shows the full mailbox, large OTP, copy buttons, optional magic-link button, and polls every 8 seconds.
@@ -78,15 +78,26 @@ The console has three task-oriented views:
 - **Addresses** — search account identities, edit service/notes, inspect history, and manage access.
 - **System** — register receiving domains, check routing, and inspect automation usage.
 
-Adding a domain from the System view:
+Adding a domain from the System view (or `cloud-mail domains add --domain D`):
 1. Finds the Cloudflare zone that owns the domain.
 2. Enables Email Routing DNS records (creates the required MX + verification TXT).
 3. Points the zone's catch-all rule at the `cloud-mail-intake` Worker.
-4. Registers the domain in the intake allowlist.
+4. Confirms public DNS (1.1.1.1) shows the Cloudflare MX records for the domain.
+5. Registers the domain in the intake allowlist.
 
-Steps 2–3 require `CF_API_TOKEN`. Without it, the response includes a `followUp.command`
-(`cd apps/intake && cloud-mail setup`) and the domain is still registered in the
-allowlist so it starts accepting mail as soon as DNS is configured externally.
+`dnsReady` is `true` only when the catch-all and the MX records are both in place.
+Otherwise the domain is still allowlisted and `followUp` names the fix:
+
+| `followUp.reason` | Meaning | `followUp.command` |
+| --- | --- | --- |
+| `cloudflare_token_missing` | `CF_API_TOKEN` is not set | `cd apps/share && npx wrangler secret put CF_API_TOKEN` |
+| `email_routing_dns_failed` | Cloudflare refused step 2 and no MX exists; usually the token lacks Zone Settings Edit | rerun `cloud-mail domains add` after fixing |
+| `dns_propagating` | routing is set, MX not visible yet | poll `cloud-mail domains check` until `ready` |
+| `routing_incomplete` | the catch-all could not be set | rerun `cloud-mail domains add` after fixing |
+
+`GET /admin/api/domains/:domain/health` (`cloud-mail domains check`) returns
+`status` (`routed` / `unrouted` / `unknown`), `detail`, and `ready`, which also
+requires the domain to be enabled in the intake allowlist.
 
 Minted addresses are stored under separate private metadata keys. Creating one does **not** whitelist it for public access. Stable `?mail=` access and opaque `/s/<id>` links remain explicit grants.
 
@@ -101,58 +112,43 @@ DELETE /admin/api/addresses/:mailbox/messages
 
 The existing `/admin/api/mailboxes` and `/admin/api/links` interfaces remain available for scripts and integrations.
 
-## Allow A Mailbox
+## Share A Mailbox
 
-Keys come from the repo-root secrets file (gitignored; override with `CLOUD_MAIL_SECRETS`):
+From the CLI, which reads the keys itself:
 
-```text
-.secrets/cloud-mail.env
+```bash
+cloud-mail links create --email name@mailbox.example.com --label shared-with-alice   # .url, .jsonUrl
+cloud-mail links list
+cloud-mail links delete --id <id>                                                     # revoke
 ```
 
-Whitelist `?mail=` URL:
+The stable `?mail=` URL needs a whitelist entry:
 
 ```bash
 scripts/allow-mailbox.sh name@mailbox.example.com
+cloud-mail api DELETE /admin/api/mailboxes/name@mailbox.example.com                  # revoke
 ```
 
-Create a share link:
+Both read keys from the repo-root `.secrets/cloud-mail.env` (gitignored; override with
+`CLOUD_MAIL_SECRETS`). Clients without the CLI send the key on stdin so it stays out
+of the process list:
 
 ```bash
-scripts/allow-mailbox.sh --link name@mailbox.example.com
+secrets=../../.secrets/cloud-mail.env
+origin="$(sed -n 's/^CLOUD_MAIL_ORIGIN=//p' "$secrets")"
+sed -n 's/^OPERATOR_KEY=/Authorization: Bearer /p' "$secrets" |
+  curl -sS -X POST "$origin/admin/api/links" -H @- -H 'content-type: application/json' \
+    --data '{"mailbox":"name@mailbox.example.com","label":"shared-with-alice"}'
 ```
 
-API equivalents:
-
-```bash
-operator_key="$(sed -n 's/^OPERATOR_KEY=//p' ../../.secrets/cloud-mail.env)"
-origin="$(sed -n 's/^CLOUD_MAIL_ORIGIN=//p' ../../.secrets/cloud-mail.env)"
-
-# whitelist
-curl -sS -X POST "$origin/admin/api/mailboxes"   -H "Authorization: Bearer ${operator_key}"   -H 'content-type: application/json'   --data '{"mailbox":"name@mailbox.example.com"}'
-
-# share link (recommended for handing an inbox to someone else)
-curl -sS -X POST "$origin/admin/api/links"   -H "Authorization: Bearer ${operator_key}"   -H 'content-type: application/json'   --data '{"mailbox":"name@mailbox.example.com","label":"shared-with-alice"}'
-```
-
-Response includes `url` and `jsonUrl`. CSV is available by appending `?format=csv`
+Link responses include `url` and `jsonUrl`. CSV is available by appending `?format=csv`
 to either URL; it returns the latest message only, as one row.
-
-## Revoke
-
-```bash
-operator_key="$(sed -n 's/^OPERATOR_KEY=//p' ../../.secrets/cloud-mail.env)"
-origin="$(sed -n 's/^CLOUD_MAIL_ORIGIN=//p' ../../.secrets/cloud-mail.env)"
-
-# whitelist
-curl -sS -X DELETE "$origin/admin/api/mailboxes/name@mailbox.example.com"   -H "Authorization: Bearer ${operator_key}"
-
-# share link
-curl -sS -X DELETE "$origin/admin/api/links/<id>"   -H "Authorization: Bearer ${operator_key}"
-```
 
 ## Deployment
 
-Deploy `apps/intake` first — this Worker reads mail through it.
+Deploy `apps/intake` first — this Worker reads mail through it. Needs only
+`npx wrangler login` and an account id (`CLOUDFLARE_ACCOUNT_ID` or `account_id` in
+`wrangler.toml`).
 
 ```bash
 npm install
@@ -167,10 +163,11 @@ Service Binding), generates `OPERATOR_KEY` and `AUTOMATION_TOKEN` into the repo-
 | --- | --- | --- |
 | `OPERATOR_KEY` | `/admin/api/*` — console and `cloud-mail` CLI | yes |
 | `AUTOMATION_TOKEN` | `/api/v1/*` — automation clients | yes |
-| `CF_API_TOKEN` | lets the console configure Email Routing DNS and catch-all when adding a domain; without it, the domain is only registered in the intake allowlist and you must run `cloud-mail setup` to finish | no |
+| `CF_API_TOKEN` | Cloudflare API calls for adding and checking domains. Needs Zone Read, Zone Settings Edit, and Email Routing Rules Edit on the mail zones. Without it, `domains add` only allowlists and answers `followUp.reason: cloudflare_token_missing` | no |
 
 Each surface accepts only its own key, as `Authorization: Bearer <key>`. An unset key
-makes its surface answer `503` rather than accept anything.
+makes its surface answer `503` rather than accept anything. Unknown `/admin/api/*`
+paths answer JSON `404`, never the console's HTML.
 
 `/admin/api/intake/*` relays intake's own JSON API verbatim (for example
 `/admin/api/intake/admin/messages?email=...`). The `cloud-mail` CLI uses it, so its

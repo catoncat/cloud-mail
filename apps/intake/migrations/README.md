@@ -1,7 +1,7 @@
 # Migrations
 
-Applied in filename order by `npm run setup` (`scripts/setup.mjs`), against the
-remote D1 database named in `config/domains.json`.
+Applied in filename order by `cloud-mail setup` (`scripts/setup.mjs`), against the
+remote D1 database named in `wrangler.jsonc`.
 
 ## Rules
 

@@ -7,9 +7,25 @@ Built for three audiences at once:
 
 | Role | Surface | Entry point |
 | --- | --- | --- |
-| **Agent** | CLI + REST API + skill | `cloud-mail` CLI, share `/admin/api/*` and `/api/v1/*` |
+| **Agent** | CLI + skill (JSON out, stable exit codes) | `cloud-mail` CLI, `skills/cloud-mail-intake/SKILL.md` |
 | **Operator** (you) | Admin PWA — domains, mailboxes, inbox, services | `https://inbox.example.com` |
 | **Recipient** (teammate / end user) | Single shareable OTP inbox link, no login | `https://inbox.example.com/s/<token>` |
+
+## For agents
+
+Most callers are agents. Everything an agent needs is one CLI that prints JSON and
+never asks it to handle a key:
+
+```bash
+email=$(cloud-mail new-address | jq -r .email)            # random address on an enabled domain
+since=$(date -u +%Y-%m-%dT%H:%M:%SZ)                      # now trigger the email
+cloud-mail latest-code --email "$email" --since "$since" --wait 120 | jq -r .code
+cloud-mail links create --email "$email" | jq -r .url     # hand the inbox to a human
+```
+
+Exit `0` means answered (read `.ok`), `1` failed (reason on stderr), `2` bad usage.
+`cloud-mail help` lists every command with its output shape; the skill in
+`skills/cloud-mail-intake/SKILL.md` is the full playbook.
 
 ## What it's for
 
@@ -62,29 +78,41 @@ automation  ─┘ AUTOMATION_TOKEN ─▶ share ─(Service Binding)─▶ inta
 
 ## Quick start
 
-Deploy intake first; share reads mail through it.
+Deploy intake first; share reads mail through it. No Cloudflare token lives on
+your machine: wrangler's OAuth login deploys, and share holds the one API token.
 
 ```bash
-# 1. receive-only mail Worker
+npx wrangler login
+
+# 1. receive-only mail Worker: D1 + migrations + deploy
 cd apps/intake
 npm install
-cp config/domains.example.json config/domains.json   # list your domains
 node scripts/cli.mjs setup
 
-# 2. admin PWA + share links
+# 2. admin PWA, share links, and the public API; writes .secrets/cloud-mail.env
 cd ../share
 npm install
 npm run setup -- --host inbox.example.com
+npx wrangler secret put CF_API_TOKEN     # Zone Read, Zone Settings Edit, Email Routing Rules Edit
+
+# 3. put the CLI on PATH and link the agent skill
+cd ../intake
+npm run install:global
+
+# 4. receive mail on a domain in that Cloudflare account
+cloud-mail domains add --domain mailbox.example.com   # read .dnsReady; else run .followUp.command
+cloud-mail health
 ```
 
-Both setups are idempotent and need Cloudflare credentials in the environment
-(`CLOUDFLARE_API_TOKEN`, or `CLOUDFLARE_EMAIL` + `CLOUDFLARE_GLOBAL_API_KEY`).
+Both setups are idempotent. Domains live in intake's D1, not in a local file;
+`cloud-mail domains add` (or System in the admin PWA) routes and enables one.
 
 Local development and redeploys:
 
 ```bash
 cd apps/share && npm run dev       # admin UI at :5173
 cd apps/share && npm run deploy    # builds web/ into dist/ then deploys
+cloud-mail deploy                  # intake
 ```
 
 ## Configuration
@@ -95,14 +123,14 @@ Three secrets, all on the share Worker:
 | --- | --- | --- |
 | `OPERATOR_KEY` | admin PWA, `cloud-mail` CLI | `/admin/api/*` |
 | `AUTOMATION_TOKEN` | automation clients | `/api/v1/*` |
-| `CF_API_TOKEN` | share itself, to configure Email Routing | Cloudflare API |
+| `CF_API_TOKEN` | share itself, to route new domains (Zone Read, Zone Settings Edit, Email Routing Rules Edit) | Cloudflare API |
 
 Intake needs no secret and has no public URL: share reaches it through a Service
 Binding, which is not reachable from the internet.
 
 Local files (all gitignored):
 
-- `.secrets/cloud-mail.env` — `CLOUD_MAIL_ORIGIN`, `OPERATOR_KEY`, `AUTOMATION_TOKEN`; written by `apps/share` setup, read by the CLI
+- `.secrets/cloud-mail.env` — `CLOUD_MAIL_ORIGIN`, `OPERATOR_KEY`, `AUTOMATION_TOKEN`; written by `apps/share` setup, read by the CLI (override the path with `CLOUD_MAIL_SECRETS`)
 - `apps/share/wrangler.toml` — routes, KV, `INTAKE` binding (see `wrangler.example.toml`)
 - `apps/intake/wrangler.jsonc` — D1, cron (see `wrangler.example.jsonc`)
 
