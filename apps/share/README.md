@@ -1,7 +1,7 @@
 # Cloud Mail Share
 
-Human-friendly shared OTP inbox on top of **cloud-mail-intake**. Reads mail from the intake
-Worker configured as `INTAKE_ORIGIN` in `wrangler.toml`.
+Human-friendly shared OTP inbox on top of **cloud-mail-intake**, and the project's only
+public API. Reads mail through the `INTAKE` Service Binding in `wrangler.toml`.
 
 Serves whatever hosts `wrangler.toml` routes, for example `https://inbox.example.com`.
 
@@ -48,7 +48,7 @@ scripts/allow-mailbox.sh --link name@mailbox.example.com
 
 The page shows the full mailbox, large OTP, copy buttons, optional magic-link button, and polls every 8 seconds.
 
-The Worker reads mail with the intake `MAIL_ADMIN_TOKEN` on the server; that token is never exposed to the browser.
+The Worker reads mail through the `INTAKE` Service Binding; nothing about intake is exposed to the browser.
 
 ## Install as PWA
 
@@ -59,7 +59,7 @@ The admin console installs as an app. Open the share origin over HTTPS:
 - Endpoints: `/manifest.webmanifest`, `/icons/*`
 
 The manifest `start_url` is `/admin`, so the installed app opens the console and
-asks for the admin key. Public share links are meant to be opened as plain URLs
+asks for the operator key (`OPERATOR_KEY`). Public share links are meant to be opened as plain URLs
 rather than installed.
 
 There is deliberately **no offline caching**. `/sw.js` serves a self-unregistering
@@ -103,10 +103,10 @@ The existing `/admin/api/mailboxes` and `/admin/api/links` interfaces remain ava
 
 ## Allow A Mailbox
 
-Credentials (gitignored; override with `CLOUD_MAIL_SHARE_CREDENTIALS`):
+Keys come from the repo-root secrets file (gitignored; override with `CLOUD_MAIL_SECRETS`):
 
 ```text
-apps/share/.secrets/share-admin.credentials
+.secrets/cloud-mail.env
 ```
 
 Whitelist `?mail=` URL:
@@ -124,14 +124,14 @@ scripts/allow-mailbox.sh --link name@mailbox.example.com
 API equivalents:
 
 ```bash
-admin_key="$(sed -n 's/^CLOUD_MAIL_SHARE_ADMIN_KEY=//p' .secrets/share-admin.credentials)"
-origin="https://inbox.example.com"
+operator_key="$(sed -n 's/^OPERATOR_KEY=//p' ../../.secrets/cloud-mail.env)"
+origin="$(sed -n 's/^CLOUD_MAIL_ORIGIN=//p' ../../.secrets/cloud-mail.env)"
 
 # whitelist
-curl -sS -X POST "$origin/admin/api/mailboxes"   -H "Authorization: Bearer ${admin_key}"   -H 'content-type: application/json'   --data '{"mailbox":"name@mailbox.example.com"}'
+curl -sS -X POST "$origin/admin/api/mailboxes"   -H "Authorization: Bearer ${operator_key}"   -H 'content-type: application/json'   --data '{"mailbox":"name@mailbox.example.com"}'
 
 # share link (recommended for handing an inbox to someone else)
-curl -sS -X POST "$origin/admin/api/links"   -H "Authorization: Bearer ${admin_key}"   -H 'content-type: application/json'   --data '{"mailbox":"name@mailbox.example.com","label":"shared-with-alice"}'
+curl -sS -X POST "$origin/admin/api/links"   -H "Authorization: Bearer ${operator_key}"   -H 'content-type: application/json'   --data '{"mailbox":"name@mailbox.example.com","label":"shared-with-alice"}'
 ```
 
 Response includes `url` and `jsonUrl`. CSV is available by appending `?format=csv`
@@ -140,14 +140,14 @@ to either URL; it returns the latest message only, as one row.
 ## Revoke
 
 ```bash
-admin_key="$(sed -n 's/^CLOUD_MAIL_SHARE_ADMIN_KEY=//p' .secrets/share-admin.credentials)"
-origin="https://inbox.example.com"
+operator_key="$(sed -n 's/^OPERATOR_KEY=//p' ../../.secrets/cloud-mail.env)"
+origin="$(sed -n 's/^CLOUD_MAIL_ORIGIN=//p' ../../.secrets/cloud-mail.env)"
 
 # whitelist
-curl -sS -X DELETE "$origin/admin/api/mailboxes/name@mailbox.example.com"   -H "Authorization: Bearer ${admin_key}"
+curl -sS -X DELETE "$origin/admin/api/mailboxes/name@mailbox.example.com"   -H "Authorization: Bearer ${operator_key}"
 
 # share link
-curl -sS -X DELETE "$origin/admin/api/links/<id>"   -H "Authorization: Bearer ${admin_key}"
+curl -sS -X DELETE "$origin/admin/api/links/<id>"   -H "Authorization: Bearer ${operator_key}"
 ```
 
 ## Deployment
@@ -159,17 +159,24 @@ npm install
 npm run setup -- --host inbox.example.com
 ```
 
-`setup` creates the KV namespace, writes `wrangler.toml`, generates the admin key into
-`.secrets/share-admin.credentials`, uploads the required secrets, builds, and deploys.
-The intake origin and admin token are read from `../intake` automatically; override with
-`--intake-origin` and `MAIL_INTAKE_ADMIN_TOKEN` if intake lives elsewhere.
+`setup` creates the KV namespace, writes `wrangler.toml` (including the `INTAKE`
+Service Binding), generates `OPERATOR_KEY` and `AUTOMATION_TOKEN` into the repo-root
+`.secrets/cloud-mail.env`, uploads both as secrets, builds, and deploys. On first run it
+adopts a legacy `.secrets/share-admin.credentials` key as `OPERATOR_KEY`, so saved
+console logins keep working.
 
-Two secrets are optional and not uploaded by setup:
+| Secret | Guards | Uploaded by setup |
+| --- | --- | --- |
+| `OPERATOR_KEY` | `/admin/api/*` — console and `cloud-mail` CLI | yes |
+| `AUTOMATION_TOKEN` | `/api/v1/*` — automation clients | yes |
+| `CF_API_TOKEN` | lets the console configure Email Routing DNS and catch-all when adding a domain; without it, the domain is only registered in the intake allowlist and you must run `cloud-mail setup` to finish | no |
 
-| Secret | Enables |
-| --- | --- |
-| `CF_API_TOKEN` | admin UI automatically configures Email Routing DNS and catch-all when adding a domain; without it, the domain is only registered in the intake allowlist and you must run `cloud-mail setup` to finish |
-| `SERVICE_TOKEN` | separate auth for the `/api/v1` automation surface |
+Each surface accepts only its own key, as `Authorization: Bearer <key>`. An unset key
+makes its surface answer `503` rather than accept anything.
+
+`/admin/api/intake/*` relays intake's own JSON API verbatim (for example
+`/admin/api/intake/admin/messages?email=...`). The `cloud-mail` CLI uses it, so its
+output is the same as when it talked to intake directly.
 
 ```bash
 npx wrangler secret put CF_API_TOKEN

@@ -6,6 +6,7 @@ import { spawnSync } from "node:child_process";
 import { loadConfig, normalizeDomain } from "./cf-api.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const SECRETS_FILE = resolve(repoRoot, "../../.secrets/cloud-mail.env");
 process.chdir(repoRoot);
 
 const args = process.argv.slice(2);
@@ -55,7 +56,7 @@ async function main() {
     case "api":
       return apiCommand(args.slice(1));
     case "token-path":
-      return console.log(resolve(repoRoot, ".secrets/mail-admin-token.txt"));
+      return console.log(existsSync(SECRETS_FILE) ? SECRETS_FILE : resolve(repoRoot, ".secrets/mail-admin-token.txt"));
     default:
       throw new Error(`Unknown command: ${command}. Run: cloud-mail help`);
   }
@@ -91,6 +92,9 @@ Worker API:
   cloud-mail reindex                    # rewrite stored code/link
   cloud-mail api GET /admin/domains
   cloud-mail api POST /admin/domains --json '{"domain":"x.example.com","enabled":true}'
+
+Worker API calls go through share when .secrets/cloud-mail.env (repo root) has
+CLOUD_MAIL_ORIGIN and OPERATOR_KEY; otherwise straight to intake's api_host.
 `);
 }
 
@@ -253,8 +257,7 @@ async function apiCommand(rest) {
 }
 
 async function workerFetch(method, path, body) {
-  const config = loadConfig(configPath(args));
-  const token = adminToken();
+  const target = apiTarget(path);
   const curlConfig = [
     "fail-with-body",
     "silent",
@@ -262,8 +265,8 @@ async function workerFetch(method, path, body) {
     "retry = 3",
     "retry-delay = 1",
     `request = "${method}"`,
-    `url = "https://${config.api_host}${path}"`,
-    `header = "Authorization: Bearer ${token}"`,
+    `url = "${target.url}"`,
+    `header = "Authorization: Bearer ${target.token}"`,
     ...(body === undefined ? [] : [`header = "content-type: application/json"`]),
     "",
   ].join("\n");
@@ -282,6 +285,33 @@ async function workerFetch(method, path, body) {
     throw new Error(`Worker API ${method} ${path} failed: ${response.stderr || text}`);
   }
   return parsed ?? text;
+}
+
+/**
+ * Where Worker API calls go.
+ *
+ * With `.secrets/cloud-mail.env` in place they go through share, authenticated
+ * with OPERATOR_KEY; share relays intake's JSON verbatim, so output is unchanged
+ * for the tools that parse it. Without the file they go straight to intake with
+ * the legacy admin token. The file is the cutover switch: remove it to roll back.
+ */
+function apiTarget(path) {
+  const secrets = existsSync(SECRETS_FILE) ? parseEnv(readFileSync(SECRETS_FILE, "utf8")) : {};
+  if (secrets.CLOUD_MAIL_ORIGIN && secrets.OPERATOR_KEY) {
+    const origin = secrets.CLOUD_MAIL_ORIGIN.replace(/\/+$/u, "");
+    return { url: `${origin}/admin/api/intake${path}`, token: secrets.OPERATOR_KEY };
+  }
+  const config = loadConfig(configPath(args));
+  return { url: `https://${config.api_host}${path}`, token: adminToken() };
+}
+
+function parseEnv(text) {
+  return Object.fromEntries(
+    text.split("\n").flatMap((line) => {
+      const match = /^([A-Z0-9_]+)=(.*)$/u.exec(line.trim());
+      return match ? [[match[1], match[2].trim()]] : [];
+    }),
+  );
 }
 
 function readConfigRaw(path) {

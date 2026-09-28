@@ -16,3 +16,6 @@ dist/
 worker-configuration.d.ts
 *.log
 .DS_Store
+
+# cf CLI cache
+.cloudflare/

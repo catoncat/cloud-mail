@@ -7,7 +7,7 @@ Built for three audiences at once:
 
 | Role | Surface | Entry point |
 | --- | --- | --- |
-| **Agent** | CLI + REST API + skill | `cloud-mail` CLI, `apps/intake` API |
+| **Agent** | CLI + REST API + skill | `cloud-mail` CLI, share `/admin/api/*` and `/api/v1/*` |
 | **Operator** (you) | Admin PWA — domains, mailboxes, inbox, services | `https://inbox.example.com` |
 | **Recipient** (teammate / end user) | Single shareable OTP inbox link, no login | `https://inbox.example.com/s/<token>` |
 
@@ -43,16 +43,22 @@ Stored mail expires automatically (`RETENTION_HOURS`, default 6), swept by a cro
 
 ```
 apps/
-  intake/   Receive-only Worker. Email Routing -> D1. Owns domains, mail, admin API.
-            Deployed at your mail host, e.g. mail.example.com
-  share/    Hono + React admin PWA and public share links. Reads via intake API.
-            Deployed at your inbox host, e.g. inbox.example.com
+  intake/   Receive-only Worker. Email Routing -> D1. Owns domains and mail.
+            Its JSON API is served on an internal entrypoint (InternalApi).
+  share/    Hono + React admin PWA, public share links, and the only public API.
+            Reads intake through a Service Binding. Deployed at e.g. inbox.example.com
 skills/
   cloud-mail-intake/   Agent skill (installed by `npm run install:global`)
 ```
 
 Two Workers, one product. `intake` is the source of truth for domains and mail;
-`share` is the human face and never talks to Email Routing directly.
+`share` is the only front door — for people, agents, and the `cloud-mail` CLI.
+
+```
+browser PWA ─┐ OPERATOR_KEY                     ┌─ Email Routing (catch-all)
+cloud-mail  ─┤                                  ▼
+automation  ─┘ AUTOMATION_TOKEN ─▶ share ─(Service Binding)─▶ intake ─▶ D1
+```
 
 ## Quick start
 
@@ -83,9 +89,23 @@ cd apps/share && npm run deploy    # builds web/ into dist/ then deploys
 
 ## Configuration
 
-- `apps/intake/config/domains.json` — enabled domains (gitignored; see `domains.example.json`)
-- `apps/intake/.secrets/mail-admin-token.txt` — admin bearer token (gitignored)
-- `apps/share/wrangler.toml` — routes + `INTAKE_ORIGIN` (gitignored; see `wrangler.example.toml`)
-- `apps/share/.secrets/share-admin.credentials` — share admin key (gitignored)
+Three secrets, all on the share Worker:
 
-Secrets stay out of git. Never print the admin token.
+| Secret | Who uses it | Where |
+| --- | --- | --- |
+| `OPERATOR_KEY` | admin PWA, `cloud-mail` CLI | `/admin/api/*` |
+| `AUTOMATION_TOKEN` | automation clients | `/api/v1/*` |
+| `CF_API_TOKEN` | share itself, to configure Email Routing | Cloudflare API |
+
+Intake needs no secret: share reaches it through a Service Binding, which is not
+reachable from the internet. (Until the migration finishes, intake's legacy public
+`/admin/*` still answers to `MAIL_ADMIN_TOKEN`; the CLI only uses it when
+`.secrets/cloud-mail.env` is absent.)
+
+Local files (all gitignored):
+
+- `.secrets/cloud-mail.env` — `CLOUD_MAIL_ORIGIN`, `OPERATOR_KEY`, `AUTOMATION_TOKEN`; written by `apps/share` setup, read by the CLI
+- `apps/share/wrangler.toml` — routes, KV, `INTAKE` binding (see `wrangler.example.toml`)
+- `apps/intake/wrangler.jsonc` — D1, cron (see `wrangler.example.jsonc`)
+
+Secrets stay out of git. Never print a key.
