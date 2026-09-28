@@ -14,7 +14,6 @@
     "check": "tsc --noEmit",
     "test": "node --experimental-strip-types --test tests/**/*.test.ts",
     "setup": "node scripts/setup.mjs",
-    "setup:domain": "node scripts/setup-domain.mjs",
     "install:global": "node scripts/install-global.mjs"
   },
   "dependencies": {
