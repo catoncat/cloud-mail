@@ -76,7 +76,7 @@ The console has three task-oriented views:
 
 - **Live** — create and copy an address, then watch the next code or magic link arrive.
 - **Addresses** — search account identities, edit service/notes, inspect history, and manage access.
-- **System** — register receiving domains, check routing, and inspect automation usage.
+- **System** — register receiving domains and check routing.
 
 Adding a domain from the System view (or `cloud-mail domains add --domain D`):
 1. Finds the Cloudflare zone that owns the domain.
@@ -144,31 +144,35 @@ sed -n 's/^OPERATOR_KEY=/Authorization: Bearer /p' "$secrets" |
 Link responses include `url` and `jsonUrl`. CSV is available by appending `?format=csv`
 to either URL; it returns the latest message only, as one row.
 
-## Automation API (`/api/v1`)
+## Agent API (`/mcp` and `/api/v1`)
 
-For agents and scripts that do not have this repo, such as an agent on a remote server.
-It takes only `AUTOMATION_TOKEN` and is receive-only. `GET /api/v1/help` is public,
-serves the full usage as markdown with the caller's own origin in every example, and
-is the reference; the table below is a summary.
+For agents anywhere: give one a tenant token and it can make addresses and read the
+mail that arrives at them. `/mcp` is a stateless Streamable HTTP MCP server (official
+`@modelcontextprotocol/server`, serving both the 2026-07-28 and the 2025 protocol);
+`/api/v1` is the same thing over plain HTTP. Both take `Authorization: Bearer cm_…`.
 
-| Endpoint | Does |
-| --- | --- |
-| `GET /api/v1/help` | usage for agents; no key, contains no key |
-| `POST /api/v1/addresses` | random address on an enabled domain; optional body `{"domain":"D"}` |
-| `GET /api/v1/code?email=&since=&wait=` | newest code received after `since`; `wait` (≤ 60 s) holds the request until one lands |
-| `GET /api/v1/link?email=&since=&wait=` | same, for magic links |
-| `GET /api/v1/messages?email=&since=&limit=` | full stored mail for one address, newest first |
-| `GET /api/v1/domains` | domains that receive mail |
-| `POST /api/v1/domains/claim` | record which service is using which domains (attribution only) |
+| MCP tool | HTTP | Does |
+| --- | --- | --- |
+| `create_inbox` | `POST /api/v1/inboxes` `{name?}` | claim a random address, or a chosen name, on a domain in the tenant's scope |
+| `wait_for_email` | `POST /api/v1/inboxes/{email}/wait?timeout=` | newest mail not yet handed out, held open up to 45 s; `{status:"waiting"}` otherwise |
+| `read_inbox` | `GET /api/v1/inboxes/{email}/messages?limit=` | recent mail, newest first; never moves what `wait` returns next |
+| — | `GET /api/v1/help` | usage for agents; public, contains no key |
 
-Answers are agent-shaped:
+Rules, all enforced in `src/lib/inboxes.ts`:
 
-- "Nothing yet" is HTTP 200 with `{"ok":false,"error":"no_code_found"}`, not an error.
-- Bad input is a 400 with `error` and a `hint` that says what to change. An address on a domain that is not enabled fails at once instead of waiting out `wait`.
-- A 401 and an unknown path both point back to `/api/v1/help`.
+- An address belongs to the tenant that created it, permanently (`inboxes` in D1). It
+  is the login identity of whatever account was registered with it, so it is never reassigned.
+- A tenant sees only its own addresses, and only mail received after it created them.
+- Chosen names are first come, first served (an atomic insert). Role names such as
+  `admin` and `postmaster`, and addresses managed in the console, are refused.
+- `wait` hands out the newest undelivered mail with its exact `received_at` and moves
+  the inbox past it; deciding whether it is the mail just triggered is the agent's call.
+- Errors are `{error, hint}`; over MCP they are tool results with `isError`.
 
-The token cannot delete mail, touch domains or Cloudflare, list a domain's mailboxes,
-or reach `/admin/api/*`.
+Tenants are managed on the operator API: `POST /admin/api/tenants` `{name, domains?}`
+(the only answer that contains the token, with `connect` setup for Claude Code, Pi,
+Codex and Cursor), `GET /admin/api/tenants`, and `POST /admin/api/tenants/{name}/rotate`,
+`/disable`, `/domains`. The `cloud-mail tenants` commands wrap them.
 
 ## Deployment
 
@@ -181,18 +185,19 @@ npm install
 npm run setup -- --host inbox.example.com
 ```
 
-`setup` creates the KV namespace, writes `wrangler.toml` (including the `INTAKE`
-Service Binding), generates `OPERATOR_KEY` and `AUTOMATION_TOKEN` into the repo-root
-`.secrets/cloud-mail.env`, uploads both as secrets, builds, and deploys.
+`setup` creates the KV namespace and the tenants D1 database, applies
+`migrations/`, writes `wrangler.toml` (including the `INTAKE` Service Binding),
+generates `OPERATOR_KEY` into the repo-root `.secrets/cloud-mail.env`, uploads it as
+a secret, builds, and deploys.
 
 | Secret | Guards | Uploaded by setup |
 | --- | --- | --- |
 | `OPERATOR_KEY` | `/admin/api/*` — console and `cloud-mail` CLI | yes |
-| `AUTOMATION_TOKEN` | `/api/v1/*` — remote agents and automation, receive-only | yes |
 | `CF_API_TOKEN` | Cloudflare API calls for adding and checking domains. Needs Zone Read, Zone Settings Edit, and Email Routing Rules Edit on the mail zones. Without it, `domains add` only allowlists and answers `followUp.reason: cloudflare_token_missing` | no |
 
-Each surface accepts only its own key, as `Authorization: Bearer <key>`. An unset key
-makes its surface answer `503` rather than accept anything. Unknown `/admin/api/*`
+The operator surface accepts only `OPERATOR_KEY`, and the agent surfaces only tenant
+tokens, each as `Authorization: Bearer <key>`. An unset `OPERATOR_KEY` makes
+`/admin/api/*` answer `503` rather than accept anything. Unknown `/admin/api/*`
 paths answer JSON `404`, never the console's HTML.
 
 `/admin/api/intake/*` relays intake's own JSON API verbatim (for example

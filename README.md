@@ -7,45 +7,53 @@ Built for three audiences at once:
 
 | Role | Surface | Entry point |
 | --- | --- | --- |
-| **Agent** | CLI + skill (JSON out, stable exit codes), or plain HTTP with no repo | `cloud-mail` CLI, `skills/cloud-mail-intake/SKILL.md`, `https://inbox.example.com/api/v1/help` |
-| **Operator** (you) | Admin PWA — domains, mailboxes, inbox, services | `https://inbox.example.com` |
+| **Agent** | Remote MCP (any agent, one line of config), or plain HTTP with the same token | `https://inbox.example.com/mcp`, `https://inbox.example.com/api/v1/help` |
+| **Operator** (you) | Admin PWA — domains, mailboxes, inbox; CLI — tenants | `https://inbox.example.com` |
 | **Recipient** (teammate / end user) | Single shareable OTP inbox link, no login | `https://inbox.example.com/s/<token>` |
 
 ## For agents
 
-Most callers are agents. There are two ways in, depending on where the agent runs.
+Most callers are agents. Connect one to the MCP endpoint and it can make an address,
+sign up with it, and receive the code — no repo, no CLI, nothing installed.
 
-### On this machine: the CLI
+### Give an agent access
 
-One CLI that prints JSON and never asks the agent to handle a key:
-
-```bash
-email=$(cloud-mail new-address | jq -r .email)            # random address on an enabled domain
-since=$(date -u +%Y-%m-%dT%H:%M:%SZ)                      # now trigger the email
-cloud-mail latest-code --email "$email" --since "$since" --wait 120 | jq -r .code
-cloud-mail links create --email "$email" | jq -r .url     # hand the inbox to a human
-```
-
-Exit `0` means answered (read `.ok`), `1` failed (reason on stderr), `2` bad usage.
-`cloud-mail help` lists every command with its output shape; the skill in
-`skills/cloud-mail-intake/SKILL.md` is the full playbook.
-
-### Anywhere else: HTTP, no repo
-
-A remote agent needs no code: only the share URL, the `AUTOMATION_TOKEN`, and curl.
-The API documents itself, so point the agent at the help page:
+Each agent (or each person) gets its own tenant token:
 
 ```bash
-curl -s https://inbox.example.com/api/v1/help                  # public, no key; markdown usage
-auth="Authorization: Bearer $CLOUD_MAIL_TOKEN"
-email=$(curl -s -X POST -H "$auth" https://inbox.example.com/api/v1/addresses | jq -r .email)
-curl -s -H "$auth" "https://inbox.example.com/api/v1/code?email=$email&since=$since&wait=60"
+cloud-mail tenants create --name mbp-claude          # prints the token once, plus setup for each client
+claude mcp add --transport http --scope user cloud-mail https://inbox.example.com/mcp \
+  --header "Authorization: Bearer cm_…"
 ```
 
-That token can create addresses and read their mail, nothing else: it cannot delete
-mail, change domains, or open the console. Put it on the remote host as an environment
-variable (for example `CLOUD_MAIL_TOKEN`), not in the agent's prompt, which ends up
-in logs.
+The answer also carries the Pi, Codex (config.toml) and Cursor setup. `--domains kada.cam` limits which
+domains the tenant's new addresses use (a zone covers its subdomains); by default it
+is every enabled domain. `tenants rotate`, `tenants disable` and `tenants set-domains`
+manage it afterwards; `tenants list` shows them all.
+
+### What the agent gets
+
+Three tools. The server instructions explain the flow, so the agent needs no skill:
+
+| Tool | Input | Answer |
+| --- | --- | --- |
+| `create_inbox` | optional `name` (random otherwise) | `{email, created_at}` |
+| `wait_for_email` | `email`, optional `timeout_seconds` (≤ 45) | the newest mail not yet handed out: `{status:"received", code, link, subject, from, received_at, age_seconds, text}`, or `{status:"waiting"}` |
+| `read_inbox` | `email`, optional `limit` | recent mail, newest first; does not affect `wait_for_email` |
+
+The rules:
+
+- An address belongs to the tenant that created it, permanently, so the agent can
+  log in with it again months later. It is never handed to anyone else.
+- A tenant reads only its own addresses, and only mail that arrived after it created them.
+- Chosen names are first come, first served; role names such as `admin@` and
+  `postmaster@`, and addresses the operator manages in the console, are refused.
+- `wait_for_email` gives the exact `received_at`; if a mail predates the moment the
+  agent triggered it, the agent calls again and gets only newer mail.
+
+Agents without an MCP client use the same token over plain HTTP; `GET /api/v1/help`
+documents it. Scripts on this machine can keep using the operator CLI
+(`cloud-mail new-address`, `cloud-mail latest-code`, see `cloud-mail help`).
 
 ## What it's for
 
@@ -81,7 +89,8 @@ Stored mail expires automatically (`RETENTION_HOURS`, default 6), swept by a cro
 apps/
   intake/   Receive-only Worker. Email Routing -> D1. Owns domains and mail.
             Its JSON API is served on an internal entrypoint (InternalApi).
-  share/    Hono + React admin PWA, public share links, and the only public API.
+  share/    Hono + React admin PWA, public share links, and every public API:
+            /mcp and /api/v1 for agents (tenants in its own D1), /admin/api for you.
             Reads intake through a Service Binding. Deployed at e.g. inbox.example.com
 skills/
   cloud-mail-intake/   Agent skill (installed by `npm run install:global`)
@@ -91,9 +100,10 @@ Two Workers, one product. `intake` is the source of truth for domains and mail;
 `share` is the only front door — for people, agents, and the `cloud-mail` CLI.
 
 ```
-browser PWA ─┐ OPERATOR_KEY                     ┌─ Email Routing (catch-all)
-cloud-mail  ─┤                                  ▼
-automation  ─┘ AUTOMATION_TOKEN ─▶ share ─(Service Binding)─▶ intake ─▶ D1
+browser PWA ─┐ OPERATOR_KEY                       ┌─ Email Routing (catch-all)
+cloud-mail  ─┘                                    ▼
+agents ─── cm_ tenant token ─▶ share ─(Service Binding)─▶ intake ─▶ D1 (mail)
+          (/mcp, /api/v1)        └─▶ D1 (tenants, address ownership)
 ```
 
 ## Quick start
@@ -109,7 +119,7 @@ cd apps/intake
 npm install
 node scripts/cli.mjs setup
 
-# 2. admin PWA, share links, and the public API; writes .secrets/cloud-mail.env
+# 2. admin PWA, share links, MCP + HTTP API, tenants D1; writes .secrets/cloud-mail.env
 cd ../share
 npm install
 npm run setup -- --host inbox.example.com
@@ -122,6 +132,9 @@ npm run install:global
 # 4. receive mail on a domain in that Cloudflare account
 cloud-mail domains add --domain mailbox.example.com   # read .dnsReady; else run .followUp.command
 cloud-mail health
+
+# 5. give an agent access (prints its token and client setup once)
+cloud-mail tenants create --name my-agent
 ```
 
 Both setups are idempotent. Domains live in intake's D1, not in a local file;
@@ -137,21 +150,23 @@ cloud-mail deploy                  # intake
 
 ## Configuration
 
-Three secrets, all on the share Worker:
+Two secrets, both on the share Worker:
 
 | Secret | Who uses it | Where |
 | --- | --- | --- |
 | `OPERATOR_KEY` | admin PWA, `cloud-mail` CLI | `/admin/api/*` |
-| `AUTOMATION_TOKEN` | remote agents and automation: receive-only (addresses, codes, links, messages) | `/api/v1/*` |
 | `CF_API_TOKEN` | share itself, to route new domains (Zone Read, Zone Settings Edit, Email Routing Rules Edit) | Cloudflare API |
+
+Agents do not use a shared secret: each tenant has its own `cm_` token for `/mcp` and
+`/api/v1`, issued with `cloud-mail tenants create`. Share's D1 stores only its SHA-256.
 
 Intake needs no secret and has no public URL: share reaches it through a Service
 Binding, which is not reachable from the internet.
 
 Local files (all gitignored):
 
-- `.secrets/cloud-mail.env` — `CLOUD_MAIL_ORIGIN`, `OPERATOR_KEY`, `AUTOMATION_TOKEN`; written by `apps/share` setup, read by the CLI (override the path with `CLOUD_MAIL_SECRETS`)
-- `apps/share/wrangler.toml` — routes, KV, `INTAKE` binding (see `wrangler.example.toml`)
+- `.secrets/cloud-mail.env` — `CLOUD_MAIL_ORIGIN`, `OPERATOR_KEY`; written by `apps/share` setup, read by the CLI (override the path with `CLOUD_MAIL_SECRETS`)
+- `apps/share/wrangler.toml` — routes, KV, D1 (tenants), `INTAKE` binding (see `wrangler.example.toml`)
 - `apps/intake/wrangler.jsonc` — D1, cron (see `wrangler.example.jsonc`)
 
 Secrets stay out of git. Never print a key.

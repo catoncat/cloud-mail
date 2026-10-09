@@ -1,17 +1,21 @@
 ---
 name: cloud-mail-intake
-description: Use this skill whenever the user or task needs a throwaway or account email address on the user's own domains and has to read what arrives there — verification codes (OTP), magic links, full inbound mail — or wants to share one inbox with a person, give a remote agent receive-only access, add or check a mail domain, or operate the cloud-mail Workers (cloudflare email routing, receive-only, inbox.0day3.com, cloud-mail CLI).
+description: Use this skill whenever the user or task needs a throwaway or account email address on the user's own domains and has to read what arrives there — verification codes (OTP), magic links, full inbound mail — or wants to share one inbox with a person, give an agent its own access (MCP tenant token), add or check a mail domain, or operate the cloud-mail Workers (cloudflare email routing, receive-only, inbox.0day3.com, cloud-mail CLI).
 disable-model-invocation: true
 ---
 
 # Cloud Mail
 
-Receive-only mail on the user's own domains. Do everything through the `cloud-mail`
-CLI. It reads the keys itself, so you never read, print, or pass a key.
+Receive-only mail on the user's own domains.
+
+If the `cloud-mail` MCP tools (`create_inbox`, `wait_for_email`, `read_inbox`) are
+connected, use them to get an address and its codes; their instructions explain the
+flow and you need nothing below for that. This skill covers the operator side: the
+`cloud-mail` CLI, which reads the keys itself, so you never read, print, or pass a key.
 
 If `cloud-mail` is not on PATH, use `node <repo>/apps/intake/scripts/cli.mjs`.
 With no repo here but `CLOUD_MAIL_TOKEN` set (a remote host), use the HTTP API instead:
-`curl -s "$CLOUD_MAIL_URL/api/v1/help"` explains it, and its answers have the same shapes.
+`curl -s "$CLOUD_MAIL_URL/api/v1/help"` explains it.
 
 ## Contract
 
@@ -69,21 +73,25 @@ Nothing fresh within the wait (still exit `0`):
 | Zones that can take domains | `cloud-mail zones` | `.zones[].name` |
 | End-to-end health | `cloud-mail health` | `.ok` |
 
-## Give a remote agent access
+## Give an agent access
 
-An agent on another machine needs no code: the share URL, `AUTOMATION_TOKEN`, and curl.
-That token is receive-only. It can create addresses and read their mail, but cannot
-delete mail, change domains, or open the console. Never give out `OPERATOR_KEY`.
+Every agent or person gets its own tenant token (`cm_…`) for `<origin>/mcp` and
+`<origin>/api/v1`. It can create addresses and read mail at the addresses it created,
+nothing else. Never give out `OPERATOR_KEY`.
 
-1. Put the token on the remote host as a file or env var without printing it:
-   `sed -n 's/^AUTOMATION_TOKEN=//p' "$(cloud-mail keys-path)" | ssh HOST 'umask 077; cat > ~/.cloud-mail-token'`
-   then have its environment export `CLOUD_MAIL_TOKEN="$(cat ~/.cloud-mail-token)"` and `CLOUD_MAIL_URL=<origin>`.
-2. Tell the remote agent only: "Receive email with `$CLOUD_MAIL_URL`; read `$CLOUD_MAIL_URL/api/v1/help` first."
-   Do not paste the token into its prompt or chat; those end up in logs.
-3. Check from the remote side: `curl -s -H "Authorization: Bearer $CLOUD_MAIL_TOKEN" "$CLOUD_MAIL_URL/api/v1/domains"` lists domains.
+| Task | Command | Read |
+| --- | --- | --- |
+| Issue a token | `cloud-mail tenants create --name N [--domains D,D]` | `.token` (shown once), `.connect.claude_code`, `.connect.pi`, `.connect.codex_config_toml`, `.connect.cursor` |
+| See tenants | `cloud-mail tenants list` | `.tenants[] \| {name, domains, inboxes, disabled_at}` |
+| Replace a token | `cloud-mail tenants rotate --name N` | `.token`; the old one stops working |
+| Cut one off | `cloud-mail tenants disable --name N` | `.disabled_at`; its addresses stay its own |
+| Limit domains | `cloud-mail tenants set-domains --name N --domains D,D\|all` | `.domains` |
 
-Rotating `AUTOMATION_TOKEN` (`cd apps/share && npx wrangler secret put AUTOMATION_TOKEN`, then
-update the keys file) cuts off every holder at once. Ask the user first.
+- `--domains` limits which domains new addresses use; an entry covers its subdomains, so a
+  zone name scopes the whole zone. Existing addresses stay readable whatever the scope.
+- The token is printed only once. Hand it over through the client setup in `.connect`
+  (or an environment variable on the remote host), never through a prompt or chat:
+  those end up in logs. Confirm with the user before issuing or disabling a token.
 
 ## Add a mail domain
 
@@ -131,7 +139,7 @@ Never print a key: not in chat, commits, PR text, logs, or command arguments.
 | Key | Surface | Where it lives |
 | --- | --- | --- |
 | `OPERATOR_KEY` | `/admin/api/*`: admin PWA and this CLI | share secret + `.secrets/cloud-mail.env` |
-| `AUTOMATION_TOKEN` | `/api/v1/*`: remote agents and automation, receive-only | share secret + `.secrets/cloud-mail.env` |
+| `cm_…` tenant tokens | `/mcp`, `/api/v1/*`: one per agent or person | only its SHA-256, in share's D1 |
 | `CF_API_TOKEN` | share's own Cloudflare API calls | share secret only |
 
 - The keys file is `<repo>/.secrets/cloud-mail.env` (mode 600, gitignored). `cloud-mail keys-path` prints its path. `CLOUD_MAIL_SECRETS` overrides it.
@@ -152,7 +160,7 @@ Never print a key: not in chat, commits, PR text, logs, or command arguments.
 
 ```
 cloud-mail / PWA ── OPERATOR_KEY ──▶ share (CLOUD_MAIL_ORIGIN) ──Service Binding──▶ intake ──▶ D1
-remote agent ── AUTOMATION_TOKEN ──▶ share /api/v1                  Email Routing catch-all ──▶ intake
+agents ── cm_ tenant token ──▶ share /mcp, /api/v1                  Email Routing catch-all ──▶ intake
 ```
 
 - Intake has no public URL. The CLI reaches intake's API through share's `/admin/api/intake/*` relay, so responses are exactly intake's.
