@@ -3,12 +3,20 @@ export interface Env {
   INTAKE: Fetcher;
   /** Operator console and `cloud-mail` CLI (`/admin/api/*`). */
   OPERATOR_KEY?: string;
-  /** Automation clients (`/api/v1/*`). */
-  AUTOMATION_TOKEN?: string;
   CF_API_TOKEN?: string;
   SHARE_LINKS: KVNamespace;
+  /** Tenants and the addresses they own; the agent surfaces (`/mcp`, `/api/v1`) authenticate against it. */
+  DB: D1Database;
   ASSETS: Fetcher;
 }
+
+/** Whoever holds one cm_ token: one of your agents, or someone you gave access to. */
+export type Tenant = {
+  id: string;
+  name: string;
+  /** Domains new addresses may use, each covering its subdomains; null means every enabled domain. */
+  domains: string[] | null;
+};
 
 export type LinkRecord = { mailbox: string; label?: string; createdAt: string };
 export type AddressRecord = {
@@ -109,22 +117,4 @@ export type Overview = {
   domainsWithMail: number;
   domainsConfigured: number;
   topDomains: DomainStat[];
-};
-
-export type ClaimRecord = {
-  service: string;
-  domain: string;
-  at: string;
-};
-
-export type ServiceUsage = {
-  service: string;
-  domains: string[];
-  claims: number;
-  lastAt: string;
-};
-
-export type DomainUsage = {
-  domain: string;
-  services: Array<{ service: string; claims: number; lastAt: string }>;
 };

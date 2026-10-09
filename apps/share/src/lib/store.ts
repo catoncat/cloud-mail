@@ -1,5 +1,5 @@
-import type { AddressRecord, ClaimRecord, DomainUsage, Env, LinkRecord, LinkView, ServiceUsage } from "./types";
-import { normalizeDomain, normalizeMailbox } from "./validate";
+import type { AddressRecord, Env, LinkRecord, LinkView } from "./types";
+import { normalizeMailbox } from "./validate";
 
 const LINK = "link:";
 const MAILBOX = "mailbox:";
@@ -9,21 +9,10 @@ const ADDRESS = "address:";
 const IDX_LINKS = "idx:links";
 const IDX_MAILBOXES = "idx:mailboxes";
 const IDX_ADDRESSES = "idx:addresses";
-const IDX_CLAIMS = "idx:claims";
-const IDX_STATS = "idx:stats";
-
-const CLAIMS_KEEP = 100;
 
 type LinkIndex = Record<string, LinkRecord>;
 type MailboxIndex = Record<string, LinkRecord>;
 type AddressIndex = Record<string, AddressRecord>;
-type StatsIndex = Record<string, StatRow>;
-
-type StatRow = { service: string; domain: string; claims: number; lastAt: string };
-
-function statKey(service: string, domain: string): string {
-  return `${service}:${domain}`;
-}
 
 async function readJson<T>(env: Env, key: string): Promise<T | null> {
   const raw = await env.SHARE_LINKS.get(key);
@@ -114,49 +103,7 @@ async function loadAddressIndex(env: Env): Promise<AddressIndex> {
   return rebuilt;
 }
 
-async function loadClaimsIndex(env: Env): Promise<ClaimRecord[]> {
-  const cached = await readJson<ClaimRecord[]>(env, IDX_CLAIMS);
-  if (cached) return cached;
 
-  // Legacy: claim: keys were append-only with reverse-timestamp names.
-  const rows: ClaimRecord[] = [];
-  let cursor: string | undefined;
-  do {
-    const page = await env.SHARE_LINKS.list({ prefix: "claim:", limit: 1000, cursor });
-    for (const key of page.keys) {
-      const raw = await env.SHARE_LINKS.get(key.name);
-      if (!raw) continue;
-      try {
-        rows.push(JSON.parse(raw) as ClaimRecord);
-      } catch {
-        /* skip */
-      }
-    }
-    cursor = page.list_complete ? undefined : page.cursor;
-  } while (cursor);
-
-  rows.sort((a, b) => String(b.at ?? "").localeCompare(String(a.at ?? "")));
-  const kept = rows.slice(0, CLAIMS_KEEP);
-  await writeJson(env, IDX_CLAIMS, kept);
-  return kept;
-}
-
-async function loadStatsIndex(env: Env): Promise<StatsIndex> {
-  const cached = await readJson<StatsIndex>(env, IDX_STATS);
-  if (cached) return cached;
-
-  const rebuilt = await rebuildFromPrefix<StatRow>(env, "svc:", (_name, raw) => {
-    try {
-      const row = JSON.parse(raw) as StatRow;
-      if (!row.service || !row.domain) return null;
-      return [statKey(row.service, row.domain), row];
-    } catch {
-      return null;
-    }
-  });
-  await writeJson(env, IDX_STATS, rebuilt);
-  return rebuilt;
-}
 
 export async function getLink(env: Env, id: string): Promise<LinkRecord | null> {
   const raw = await env.SHARE_LINKS.get(LINK + id);
@@ -282,74 +229,11 @@ function byNewest(a: { createdAt?: string; mailbox: string }, b: { createdAt?: s
   return a.mailbox.localeCompare(b.mailbox);
 }
 
-/** Append to a bounded claim log and bump the per-service rollup — no list(). */
-export async function recordClaim(env: Env, service: string, domain: string): Promise<void> {
-  const at = new Date().toISOString();
-  const [claims, stats] = await Promise.all([loadClaimsIndex(env), loadStatsIndex(env)]);
-
-  claims.unshift({ service, domain, at });
-  const kept = claims.slice(0, CLAIMS_KEEP);
-
-  const key = statKey(service, domain);
-  const prev = stats[key];
-  stats[key] = {
-    service,
-    domain,
-    claims: (prev?.claims ?? 0) + 1,
-    lastAt: at,
-  };
-
-  await Promise.all([
-    writeJson(env, IDX_CLAIMS, kept),
-    writeJson(env, IDX_STATS, stats),
-  ]);
-}
-
-export async function listClaims(env: Env, limit = 50): Promise<ClaimRecord[]> {
-  const claims = await loadClaimsIndex(env);
-  return claims.slice(0, limit);
-}
-
-async function allStats(env: Env): Promise<StatRow[]> {
-  return Object.values(await loadStatsIndex(env));
-}
-
-export async function domainUsage(env: Env): Promise<DomainUsage[]> {
-  return domainUsageFrom(await allStats(env));
-}
-
-/** One index read, three derived views — for admin /usage. */
-export async function usageSnapshot(
-  env: Env,
-  recentLimit = 30,
-): Promise<{ services: ServiceUsage[]; domains: DomainUsage[]; recent: ClaimRecord[] }> {
-  const [stats, recent] = await Promise.all([allStats(env), listClaims(env, recentLimit)]);
-  return {
-    services: serviceUsageFrom(stats),
-    domains: domainUsageFrom(stats),
-    recent,
-  };
-}
-
-function serviceUsageFrom(rows: StatRow[]): ServiceUsage[] {
-  const grouped = new Map<string, ServiceUsage>();
-  for (const r of rows) {
-    const cur = grouped.get(r.service) ?? { service: r.service, domains: [], claims: 0, lastAt: "" };
-    if (!cur.domains.includes(r.domain)) cur.domains.push(r.domain);
-    cur.claims += r.claims;
-    if (r.lastAt > cur.lastAt) cur.lastAt = r.lastAt;
-    grouped.set(r.service, cur);
-  }
-  return [...grouped.values()].sort((a, b) => b.lastAt.localeCompare(a.lastAt));
-}
-
-function domainUsageFrom(rows: StatRow[]): DomainUsage[] {
-  const grouped = new Map<string, DomainUsage>();
-  for (const r of rows) {
-    const cur = grouped.get(r.domain) ?? { domain: r.domain, services: [] };
-    cur.services.push({ service: r.service, claims: r.claims, lastAt: r.lastAt });
-    grouped.set(r.domain, cur);
-  }
-  for (const d of grouped.values()) d.services.sort((a, b) => b.lastAt.localeCompare(a.lastAt));
-  return [...grouped.values()];
+/**
+ * Addresses the operator manages in the console: saved, opened publicly, or shared by link.
+ * A tenant may never claim one, or it would receive the operator's mail.
+ */
+export async function isOperatorMailbox(env: Env, mailbox: string): Promise<boolean> {
+  const [address, open, links] = await Promise.all([getAddress(env, mailbox), getMailbox(env, mailbox), loadLinkIndex(env)]);
+  return Boolean(address || open || Object.values(links).some((link) => link.mailbox === mailbox));
 }

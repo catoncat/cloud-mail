@@ -1,4 +1,4 @@
-import type { AddressView, DomainHealth, DomainStat, LinkView, MessageFeed, Overview, UsageReport, Zone } from "./types";
+import type { AddressView, DomainHealth, DomainStat, LinkView, MessageFeed, Overview, Zone } from "./types";
 
 const KEY_STORAGE = "mailAdminKey";
 
@@ -52,7 +52,6 @@ export const api = {
     request<{ ok: boolean; domain: string; dnsReady: boolean; followUp: { command: string } | null }>(
       "/domains", key, { method: "POST", body: JSON.stringify({ domain }) },
     ),
-  usage: (key: string) => request<UsageReport>("/usage", key),
   createLink: (key: string, mailbox: string, label?: string) =>
     request<LinkView>("/links", key, { method: "POST", body: JSON.stringify({ mailbox, label }) }),
   deleteLink: (key: string, id: string) => request<{ ok: boolean }>(`/links/${id}`, key, { method: "DELETE" }),

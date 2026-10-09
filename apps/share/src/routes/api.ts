@@ -23,6 +23,18 @@ import {
 } from "../lib/cloudflare";
 import { type Check, followUpFor, readiness, type RoutingStatus } from "../lib/domains";
 import * as store from "../lib/store";
+import {
+  connectInfo,
+  createTenant,
+  disableTenant,
+  inScope,
+  listTenants,
+  normalizeTenantName,
+  parseScope,
+  rotateTenant,
+  setTenantDomains,
+  TenantError,
+} from "../lib/tenants";
 import type { Env } from "../lib/types";
 import { createLinkId, isValidLinkId, normalizeDomain, normalizeMailbox, splitMailboxes } from "../lib/validate";
 
@@ -241,8 +253,6 @@ api.get("/mailboxes/:mailbox/latest", async (c) => {
   return c.json({ mailbox, latest: item ? toLatest(item, mailbox) : null });
 });
 
-api.get("/usage", async (c) => c.json(await store.usageSnapshot(c.env, 30)));
-
 /** Flat, paginated message feed across all domains. */
 api.get("/messages", async (c) => {
   const domain = c.req.query("domain");
@@ -341,3 +351,54 @@ api.delete("/mailboxes/:mailbox", async (c) => {
   await store.deleteMailbox(c.env, mailbox);
   return c.json({ ok: true, mailbox });
 });
+
+/**
+ * Tenants: who may use the agent surfaces (/mcp, /api/v1).
+ *
+ * A token is shown once, in the answer that issues it, together with
+ * ready-to-paste client setup. Only its SHA-256 is stored.
+ */
+api.get("/tenants", async (c) => c.json({ tenants: await listTenants(c.env) }));
+
+api.post("/tenants", async (c) => {
+  const input = await body<{ name: string; domains: unknown }>(c);
+  const name = normalizeTenantName(input.name);
+  if (!name) throw invalidTenantName();
+  const created = await createTenant(c.env, name, await domainScope(c.env, input.domains));
+  return c.json({ ...created, ...connectInfo(new URL(c.req.url).origin, created.token) }, 201);
+});
+
+api.post("/tenants/:name/rotate", async (c) => {
+  const rotated = await rotateTenant(c.env, tenantName(c.req.param("name")));
+  return c.json({ ...rotated, ...connectInfo(new URL(c.req.url).origin, rotated.token) });
+});
+
+api.post("/tenants/:name/disable", async (c) => c.json(await disableTenant(c.env, tenantName(c.req.param("name")))));
+
+api.post("/tenants/:name/domains", async (c) => {
+  const input = await body<{ domains: unknown }>(c);
+  return c.json(await setTenantDomains(c.env, tenantName(c.req.param("name")), await domainScope(c.env, input.domains)));
+});
+
+function tenantName(raw: string): string {
+  const name = normalizeTenantName(raw);
+  if (!name) throw invalidTenantName();
+  return name;
+}
+
+function invalidTenantName(): TenantError {
+  return new TenantError("invalid_name", 400, "A tenant name is 3-40 of a-z 0-9 . _ - and starts and ends with a letter or digit.");
+}
+
+/** A scope entry must cover at least one configured domain, or it is a typo that would silently match nothing. */
+async function domainScope(env: Env, raw: unknown): Promise<string[] | null> {
+  const parsed = parseScope(raw);
+  if (!parsed.ok) throw new TenantError("invalid_domains", 400, `Not domain names: ${parsed.invalid.join(", ")}`);
+  if (parsed.scope === null) return null;
+  const configured = (await listDomains(env)).map((d) => d.domain);
+  const unknown = parsed.scope.filter((entry) => !configured.some((domain) => inScope(domain, [entry])));
+  if (unknown.length) {
+    throw new TenantError("unknown_domains", 400, `No configured domain is or is under: ${unknown.join(", ")}. List them with: cloud-mail domains`);
+  }
+  return parsed.scope;
+}

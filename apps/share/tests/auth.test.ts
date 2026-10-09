@@ -1,10 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { Hono } from "hono";
-import { bearerToken, requireSecret, secretMatches } from "../src/lib/auth.ts";
+import { bearerToken, requireSecret, type SecretName, secretMatches } from "../src/lib/auth.ts";
 import type { Env } from "../src/lib/types.ts";
 
-function appFor(name: "OPERATOR_KEY" | "AUTOMATION_TOKEN") {
+function appFor(name: SecretName) {
   const app = new Hono<{ Bindings: Env }>();
   app.use("*", requireSecret(name));
   app.get("/", (c) => c.text("ok"));
@@ -41,10 +41,4 @@ test("requireSecret: accepts the right key, rejects everything else", async () =
   assert.equal((await app.request("/", {}, bindings)).status, 401);
   // Legacy custom headers are gone.
   assert.equal((await app.request("/", { headers: { "x-admin-key": "op-key" } }, bindings)).status, 401);
-});
-
-test("requireSecret: no fallback between the two secrets", async () => {
-  const bindings = env({ OPERATOR_KEY: "op-key", AUTOMATION_TOKEN: "auto-token" });
-  const res = await appFor("AUTOMATION_TOKEN").request("/", { headers: { authorization: "Bearer op-key" } }, bindings);
-  assert.equal(res.status, 401);
 });

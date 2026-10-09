@@ -1,8 +1,12 @@
 import type { MiddlewareHandler } from "hono";
-import type { Env } from "./types";
+import { findTenantByToken } from "./tenants";
+import type { Env, Tenant } from "./types";
 
-/** Each surface has exactly one secret; there is no fallback to another key. */
-export type SecretName = "OPERATOR_KEY" | "AUTOMATION_TOKEN";
+/** The operator surface has exactly one secret. Agents use tenant tokens instead (see requireTenant). */
+export type SecretName = "OPERATOR_KEY";
+
+/** Set by requireTenant for the handlers behind it. */
+export type TenantVars = { tenant: Tenant };
 
 export function bearerToken(header: string | undefined): string {
   return /^Bearer\s+(.+)$/i.exec(header ?? "")?.[1]?.trim() ?? "";
@@ -39,6 +43,22 @@ export function requireSecret(name: SecretName, hint?: string): MiddlewareHandle
     if (!provided || !(await secretMatches(provided, expected))) {
       return c.json(hint ? { error: "unauthorized", hint } : { error: "unauthorized" }, 401);
     }
+    await next();
+  };
+}
+
+/**
+ * Bearer auth for the agent surfaces: the token must belong to an enabled tenant.
+ *
+ * Tokens are looked up by their SHA-256, so there is no secret to compare in
+ * constant time; an unknown and a disabled token answer the same 401.
+ */
+export function requireTenant(hint: string): MiddlewareHandler<{ Bindings: Env; Variables: TenantVars }> {
+  return async (c, next) => {
+    const token = bearerToken(c.req.header("authorization"));
+    const tenant = token ? await findTenantByToken(c.env, token) : null;
+    if (!tenant) return c.json({ error: "unauthorized", hint }, 401, { "www-authenticate": 'Bearer realm="cloud-mail"' });
+    c.set("tenant", tenant);
     await next();
   };
 }

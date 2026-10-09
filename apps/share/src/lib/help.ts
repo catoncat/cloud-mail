@@ -1,4 +1,5 @@
-import { MAX_MESSAGES, MAX_WAIT_SECONDS, POLL_MS } from "./receive";
+import { DEFAULT_READ, MAX_READ, MAX_TEXT } from "./inboxes";
+import { MAX_WAIT_SECONDS, POLL_MS } from "./receive";
 
 /**
  * Usage for GET /api/v1/help, written for an agent that has only a URL and a token.
@@ -8,70 +9,73 @@ import { MAX_MESSAGES, MAX_WAIT_SECONDS, POLL_MS } from "./receive";
  */
 export function automationHelp(origin: string): string {
   const base = `${origin}/api/v1`;
-  return `# Cloud Mail API
+  return `# Cloud Mail
 
-Receive-only email on the operator's domains: make an address, read the
-verification code, magic link, or full mail that arrives there. No SDK, just HTTP.
+Receive-only email on the operator's domains: make an address, sign up with it,
+then read the verification code, magic link or full mail that arrives there.
 
-Base URL: ${base}
-Auth: every endpoint except this page needs \`Authorization: Bearer $CLOUD_MAIL_TOKEN\`.
-Keep the token in an environment variable. Never print it, log it, or put it in a URL.
+Auth: \`Authorization: Bearer $CLOUD_MAIL_TOKEN\` (a \`cm_\` token from the operator).
+Keep it in an environment variable. Never print it, log it, or put it in a URL.
 
-## Receive a verification code
+## With an MCP client (preferred)
+
+Streamable HTTP endpoint: \`${origin}/mcp\`, same bearer token. Tools:
+\`create_inbox\`, \`wait_for_email\`, \`read_inbox\`. The server instructions explain the flow.
+
+\`\`\`bash
+claude mcp add --transport http --scope user cloud-mail ${origin}/mcp --header "Authorization: Bearer $CLOUD_MAIL_TOKEN"
+\`\`\`
+
+## Over plain HTTP
 
 \`\`\`bash
 auth="Authorization: Bearer $CLOUD_MAIL_TOKEN"
-email=$(curl -s -X POST -H "$auth" ${base}/addresses | jq -r .email)
-since=$(date -u +%Y-%m-%dT%H:%M:%SZ)     # take it BEFORE the mail is triggered
+email=$(curl -s -X POST -H "$auth" ${base}/inboxes | jq -r .email)
 # ... submit "$email" in the signup or login form ...
-curl -s -H "$auth" "${base}/code?email=$email&since=$since&wait=${MAX_WAIT_SECONDS}"
+curl -s -X POST -H "$auth" "${base}/inboxes/$email/wait"
 \`\`\`
 
-Found:
+Received:
 
 \`\`\`json
-{"ok":true,"code":"123456","item":{"id":"…","recipient":"…","subject":"…","received_at":"2026-01-02T03:04:05.678Z","code":"123456"}}
+{"status":"received","id":"…","from":"no-reply@example.com","subject":"Your code","received_at":"2026-01-02T03:04:05.678Z","age_seconds":4,"code":"123456","link":null,"text":"…"}
 \`\`\`
 
-Nothing yet (HTTP 200). Call again with the same \`since\`:
+Nothing new within the wait (HTTP 200): call again.
 
 \`\`\`json
-{"ok":false,"error":"no_code_found","item":null,"code":""}
+{"status":"waiting","hint":"Nothing new in ${MAX_WAIT_SECONDS}s. Call again with the same email; some senders take a minute."}
 \`\`\`
 
-- Always pass \`since\`. Without it, an older code already in the mailbox is returned at once.
-- To resend: take a new \`since\`, trigger the resend, then call again.
-- Magic links work the same way: \`/link\` puts the URL in \`.link\`.
-- Any local part at an enabled domain receives mail, so there is nothing to register first.
-- If your HTTP client has a timeout, make it longer than \`wait\`.
+- Each wait returns the newest mail you have not been given yet, so a resend is just another wait.
+- If \`received_at\` is earlier than when you triggered the email, it is an older mail: wait again.
+- The address is yours permanently: log in with it again months later and wait the same way.
+- You only see mail that arrived after you created the address.
 
 ## Endpoints
 
 | Method and path | Parameters | Returns |
 | --- | --- | --- |
 | \`GET /help\` | none, no auth | this page |
-| \`POST /addresses\` | JSON body, optional: \`{"domain":"D"}\` | \`{ok, email, domain}\` |
-| \`GET /code\` | \`email\`, \`since\`, \`wait\` (0-${MAX_WAIT_SECONDS} s, default 0) | \`{ok, code, item}\` |
-| \`GET /link\` | \`email\`, \`since\`, \`wait\` | \`{ok, link, item}\` |
-| \`GET /messages\` | \`email\`, \`since\`, \`limit\` (1-${MAX_MESSAGES}, default 10) | \`{ok, items[]}\`, newest first |
-| \`GET /domains\` | none | \`{domains[]}\`, the domains that receive mail |
+| \`POST /inboxes\` | JSON body, optional: \`{"name":"github-ci"}\` (1-40 of a-z 0-9 . _ -) | \`{email, created_at}\` (201) |
+| \`POST /inboxes/{email}/wait\` | \`timeout\` (0-${MAX_WAIT_SECONDS} s, default ${MAX_WAIT_SECONDS}) | \`{status:"received", …mail}\` or \`{status:"waiting", hint}\` |
+| \`GET /inboxes/{email}/messages\` | \`limit\` (1-${MAX_READ}, default ${DEFAULT_READ}) | \`{messages[]}\`, newest first; does not affect wait |
 
-\`since\` is ISO 8601 (\`2026-01-02T03:04:05Z\`) or a window back from now (\`90s\`, \`10m\`, \`2h\`).
-\`wait\` holds the request open, checking every ${POLL_MS / 1000} s, until a fresh match arrives.
-Each item in \`/messages\` has \`sender\`, \`subject\`, \`received_at\`, \`text_body\`, \`html_body\`, \`code\`, \`link\`.
-Read \`text_body\` when a mail arrived but \`code\` is empty.
+A mail has \`id\`, \`from\`, \`subject\`, \`received_at\`, \`age_seconds\`, \`code\`, \`link\` and \`text\`
+(cut at ${MAX_TEXT} characters). \`code\` and \`link\` are null when none was found: read \`text\`.
+\`wait\` holds the request open, checking every ${POLL_MS / 1000} s. If your HTTP client has a timeout, make it longer.
 
-## Responses
+## Errors
 
-| HTTP | Body | Do |
+Every error body is \`{error, hint}\`; do what \`hint\` says.
+
+| HTTP | error | Do |
 | --- | --- | --- |
-| 200 | \`ok: true\` | use the answer |
-| 200 | \`ok: false\`, \`no_code_found\` / \`no_link_found\` | nothing fresh yet: call again with the same \`since\` |
-| 400 | \`error\` + \`hint\` | fix the request as \`hint\` says; retrying unchanged fails again |
-| 401 | \`unauthorized\` | the token is missing or wrong; ask the operator, do not guess |
+| 400 | \`invalid_name\`, \`invalid_email\` | fix the input; retrying unchanged fails again |
+| 401 | \`unauthorized\` | the token is missing, wrong or disabled; ask the operator, do not guess |
+| 404 | \`inbox_not_found\` | you did not create this address; call \`POST /inboxes\` |
+| 409 | \`name_taken\`, \`name_reserved\` | pick another name, or omit it for a random address |
 | 502 | \`intake_unavailable\` | the mail backend is down; retry in a minute, then report it |
-
-This token can create addresses and read their mail. It cannot delete mail,
-change domains, or reach the operator console.
+| 503 | \`no_domains_available\` | no domain is enabled for this token; ask the operator |
 `;
 }

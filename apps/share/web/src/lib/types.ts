@@ -77,9 +77,3 @@ export type MessageFeed = {
 };
 
 export type Zone = { id: string; name: string; status: string };
-
-export type UsageReport = {
-  services: Array<{ service: string; domains: string[]; claims: number; lastAt: string }>;
-  domains: Array<{ domain: string; services: Array<{ service: string; claims: number; lastAt: string }> }>;
-  recent: Array<{ service: string; domain: string; at: string }>;
-};

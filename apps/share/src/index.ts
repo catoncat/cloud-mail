@@ -1,14 +1,26 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { api } from "./routes/api";
+import { mcp } from "./routes/mcp";
 import { publicRoutes } from "./routes/public";
 import { service } from "./routes/service";
+import { InboxError } from "./lib/inboxes";
 import { IntakeError } from "./lib/intake";
+import { TenantError } from "./lib/tenants";
 import type { Env } from "./lib/types";
 
 const app = new Hono<{ Bindings: Env }>();
 
 app.use("/api/v1/*", cors({ origin: "*", allowHeaders: ["authorization", "content-type"], allowMethods: ["GET", "POST", "OPTIONS"] }));
+app.use(
+  "/mcp",
+  cors({
+    origin: "*",
+    allowHeaders: ["authorization", "content-type", "mcp-protocol-version", "mcp-session-id", "last-event-id"],
+    allowMethods: ["GET", "POST", "DELETE", "OPTIONS"],
+    exposeHeaders: ["mcp-session-id"],
+  }),
+);
 app.use("/admin/api/*", cors({ origin: "*", allowHeaders: ["authorization", "content-type"], allowMethods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"] }));
 
 app.use("*", async (c, next) => {
@@ -19,6 +31,7 @@ app.use("*", async (c, next) => {
 
 app.route("/admin/api", api);
 app.route("/api/v1", service);
+app.route("/mcp", mcp);
 // An unknown API path must answer JSON, not fall through to the SPA shell below.
 app.all("/admin/api/*", (c) => c.json({ error: "not_found" }, 404));
 app.all("/api/v1/*", (c) => c.json({ error: "not_found", hint: "GET /api/v1/help lists the endpoints" }, 404));
@@ -92,6 +105,8 @@ app.route("/", publicRoutes);
 
 app.notFound((c) => c.json({ error: "not_found" }, 404));
 app.onError((err, c) => {
+  // A rejected request is an answer for the caller, not a server fault worth logging.
+  if (err instanceof InboxError || err instanceof TenantError) return c.json({ error: err.code, hint: err.hint }, err.status);
   console.error(JSON.stringify({ level: "error", message: err.message }));
   if (err instanceof IntakeError) return c.json({ error: "intake_unavailable", detail: err.code }, 502);
   return c.json({ error: "internal_error" }, 500);
