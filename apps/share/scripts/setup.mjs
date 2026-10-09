@@ -11,6 +11,7 @@ const skipDeploy = flags.has("--skip-deploy");
 const shareHost = valueAfter("--host");
 const workerName = valueAfter("--name") ?? "cloud-mail-share";
 const kvTitle = valueAfter("--kv-title") ?? `${workerName}-links`;
+const d1Name = valueAfter("--d1-name") ?? workerName;
 
 if (flags.has("--help") || flags.has("-h")) {
   console.log(`Usage: node scripts/setup.mjs [options]
@@ -18,14 +19,17 @@ if (flags.has("--help") || flags.has("-h")) {
   --host <domain>            Custom domain for the share UI, e.g. inbox.example.com
   --name <worker-name>       Worker name (default: cloud-mail-share)
   --kv-title <title>         KV namespace title (default: <worker-name>-links)
+  --d1-name <name>           D1 database for tenants (default: <worker-name>)
   --skip-deploy              Configure everything but do not deploy
 
 Requires \`npx wrangler login\` (no local Cloudflare token), an account id
 (CLOUDFLARE_ACCOUNT_ID or account_id in wrangler.toml), and a deployed intake
 Worker (share reaches it through the INTAKE Service Binding).
 
-Generates OPERATOR_KEY and AUTOMATION_TOKEN once, uploads them, and keeps them in
-.secrets/cloud-mail.env at the repo root for the cloud-mail CLI.`);
+Generates OPERATOR_KEY once, uploads it, and keeps it in .secrets/cloud-mail.env
+at the repo root for the cloud-mail CLI. Creates the tenants D1 database and
+applies its migrations. Agents get their own tokens afterwards:
+cloud-mail tenants create --name <name>.`);
   process.exit(0);
 }
 
@@ -37,11 +41,12 @@ await ensureDependencies();
 
 const accountId = resolveAccountId();
 const kvId = ensureKvNamespace(kvTitle);
-updateWrangler({ accountId, kvId, workerName, shareHost });
+const d1Id = ensureD1Database(d1Name);
+updateWrangler({ accountId, kvId, d1Id, d1Name, workerName, shareHost });
+run("npx", ["wrangler", "d1", "migrations", "apply", d1Name, "--remote"]);
 
 const secrets = ensureSecrets();
 putSecret("OPERATOR_KEY", secrets.OPERATOR_KEY);
-putSecret("AUTOMATION_TOKEN", secrets.AUTOMATION_TOKEN);
 
 run("npm", ["run", "build"]);
 
@@ -53,6 +58,7 @@ console.log(`
 [done] share UI configured.
 
   Admin page:  ${shareHost ? `https://${shareHost}/admin` : "<your share host>/admin"}
+  Agents:      ${shareHost ? `https://${shareHost}/mcp` : "<your share host>/mcp"}  (token: cloud-mail tenants create --name <name>)
   Keys:        .secrets/cloud-mail.env at the repo root (mode 600, gitignored)
 
 Needed to add mail domains (cloud-mail domains add, or the admin UI):
@@ -95,14 +101,13 @@ async function ensureDependencies() {
   run("npm", ["install"]);
 }
 
-/** OPERATOR_KEY and AUTOMATION_TOKEN, generated once and reused on every run. */
+/** OPERATOR_KEY, generated once and reused on every run. */
 function ensureSecrets() {
   const values = existsSync(SECRETS_FILE) ? parseEnv(readFileSync(SECRETS_FILE, "utf8")) : {};
   values.OPERATOR_KEY ||= randomBytes(32).toString("base64url");
-  values.AUTOMATION_TOKEN ||= randomBytes(32).toString("base64url");
   if (shareHost) values.CLOUD_MAIL_ORIGIN = `https://${shareHost}`;
 
-  const body = ["CLOUD_MAIL_ORIGIN", "OPERATOR_KEY", "AUTOMATION_TOKEN"]
+  const body = ["CLOUD_MAIL_ORIGIN", "OPERATOR_KEY"]
     .filter((name) => values[name])
     .map((name) => `${name}=${values[name]}\n`)
     .join("");
@@ -131,7 +136,22 @@ function resolveAccountId() {
   throw new Error("Missing account id. Set CLOUDFLARE_ACCOUNT_ID or fill account_id in wrangler.toml.");
 }
 
+/** An id already in wrangler.toml, unless it is still the example placeholder. */
+function configuredId(pattern) {
+  const id = pattern.exec(readFileSync("wrangler.toml", "utf8"))?.[1] ?? "";
+  return id && !id.startsWith("REPLACE_WITH") ? id : null;
+}
+
+/**
+ * The configured namespace wins over a lookup by title: a live deployment may
+ * use a namespace with another title, and swapping it would hide all its data.
+ */
 function ensureKvNamespace(title) {
+  const configured = configuredId(/binding = "SHARE_LINKS", id = "([^"]*)"/u);
+  if (configured) {
+    console.log(`[ok] KV configured: ${configured}`);
+    return configured;
+  }
   const list = JSON.parse(capture("npx", ["wrangler", "kv", "namespace", "list"]));
   const existing = list.find((ns) => ns.title === title);
   if (existing) {
@@ -145,11 +165,38 @@ function ensureKvNamespace(title) {
   return match[1];
 }
 
-function updateWrangler({ accountId, kvId, workerName: name, shareHost: host }) {
+function ensureD1Database(name) {
+  const configured = configuredId(/database_id = "([^"]*)"/u);
+  if (configured) {
+    console.log(`[ok] D1 configured: ${configured}`);
+    return configured;
+  }
+  const list = JSON.parse(capture("npx", ["wrangler", "d1", "list", "--json"]));
+  const existing = list.find((db) => db.name === name);
+  if (existing) {
+    console.log(`[ok] D1 exists: ${name}`);
+    return existing.uuid;
+  }
+  const created = capture("npx", ["wrangler", "d1", "create", name]);
+  const match = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/iu.exec(created);
+  if (!match) throw new Error(`Could not parse D1 database id from wrangler output:\n${created}`);
+  console.log(`[ok] D1 created: ${name}`);
+  return match[1];
+}
+
+function updateWrangler({ accountId, kvId, d1Id, d1Name: database, workerName: name, shareHost: host }) {
   let text = readFileSync("wrangler.toml", "utf8");
   text = text.replace(/^name\s*=\s*"[^"]*"/mu, `name = "${name}"`);
   text = text.replace(/^account_id\s*=\s*"[^"]*"/mu, `account_id = "${accountId}"`);
-  text = text.replace(/id = "[^"]*" \}/u, `id = "${kvId}" }`);
+  text = text.replace(/(binding = "SHARE_LINKS", id = ")[^"]*"/u, `$1${kvId}"`);
+  // Configs written before tenants existed have no D1 block yet.
+  if (!/^d1_databases\s*=/mu.test(text)) {
+    text = text.replace(
+      /^(kv_namespaces = \[[\s\S]*?\n\]\n)/mu,
+      `$1\n# Tenants and the addresses they own. Strongly consistent: names are claimed first come, first served.\nd1_databases = [\n  { binding = "DB", database_name = "${database}", database_id = "${d1Id}", migrations_dir = "migrations" }\n]\n`,
+    );
+  }
+  text = text.replace(/database_name = "[^"]*", database_id = "[^"]*"/u, `database_name = "${database}", database_id = "${d1Id}"`);
   if (host) {
     // Drop the placeholder route carried over from wrangler.example.toml.
     text = text.replace(/^\s*\{ pattern = "inbox\.example\.com".*\},?\n/mu, "");

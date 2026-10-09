@@ -1,10 +1,10 @@
 # Copy to wrangler.toml, or let `npm run setup` generate and fill it for you.
 #
-# Secrets are not stored here. `npm run setup` generates the first two into
-# ../../.secrets/cloud-mail.env and uploads them with `wrangler secret put`:
+# Secrets are not stored here. `npm run setup` generates the first one into
+# ../../.secrets/cloud-mail.env and uploads it with `wrangler secret put`:
 #   OPERATOR_KEY      operator console + cloud-mail CLI (/admin/api/*)
-#   AUTOMATION_TOKEN  automation clients (/api/v1/*)
 #   CF_API_TOKEN      optional; lets the admin UI list zones / add domains
+# Agents (/mcp, /api/v1) use per-tenant tokens kept in D1: cloud-mail tenants create.
 
 name = "cloud-mail-share"
 account_id = "REPLACE_WITH_ACCOUNT_ID"
@@ -20,6 +20,11 @@ routes = [
 
 kv_namespaces = [
   { binding = "SHARE_LINKS", id = "REPLACE_WITH_KV_NAMESPACE_ID" }
+]
+
+# Tenants and the addresses they own. Strongly consistent: names are claimed first come, first served.
+d1_databases = [
+  { binding = "DB", database_name = "cloud-mail-share", database_id = "REPLACE_WITH_D1_DATABASE_ID", migrations_dir = "migrations" }
 ]
 
 # Mail is read through intake's internal entrypoint: no token, no public hop.
