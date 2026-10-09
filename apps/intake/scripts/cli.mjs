@@ -46,6 +46,8 @@ async function main() {
       return clearCommand(rest);
     case "links":
       return linksCommand(rest);
+    case "tenants":
+      return tenantsCommand(rest);
     case "domains":
       return domainsCommand(rest);
     case "zones":
@@ -97,6 +99,15 @@ Share an inbox with a human (page auto-polls the latest code):
   cloud-mail links create --email E [--label L]       -> {id, url, jsonUrl, mailbox}
   cloud-mail links list                               -> {links[]}
   cloud-mail links delete --id ID                     -> {ok}
+
+Give an agent its own access (MCP at <share>/mcp, or plain HTTP at <share>/api/v1):
+  cloud-mail tenants create --name N [--domains D,D]  -> {name, token, mcp_url, connect{claude_code, pi, codex_config_toml, cursor}}
+      the token is printed only here; --domains limits which domains new addresses use
+      (each covers its subdomains, so a zone name scopes the zone); default is every enabled domain
+  cloud-mail tenants list                             -> {tenants[{name, domains, inboxes, disabled_at}]}
+  cloud-mail tenants rotate --name N                  -> new token; the old one stops working
+  cloud-mail tenants disable --name N                 stops the token; its addresses stay its own
+  cloud-mail tenants set-domains --name N --domains D,D|all
 
 Domains:
   cloud-mail domains list                             -> {ok, items[{domain, zone, enabled}]}
@@ -221,6 +232,22 @@ function linksCommand(rest) {
     return printJson(shareFetch("DELETE", `/links/${encodeURIComponent(requiredOption(rest, "--id"))}`));
   }
   throw new UsageError(`Unknown links command: ${sub}. Use: list | create --email E | delete --id ID`);
+}
+
+/** Who may use the agent surfaces. A token exists in plain text only in the answer that issues it. */
+function tenantsCommand(rest) {
+  const sub = rest[0] ?? "list";
+  if (sub === "list") return printJson(shareFetch("GET", "/tenants"));
+  if (sub === "create") {
+    return printJson(shareFetch("POST", "/tenants", { name: requiredOption(rest, "--name"), domains: option(rest, "--domains") ?? undefined }));
+  }
+  if (!["rotate", "disable", "set-domains"].includes(sub)) {
+    throw new UsageError(`Unknown tenants command: ${sub}. Use: list | create | rotate | disable | set-domains`);
+  }
+  const path = `/tenants/${encodeURIComponent(requiredOption(rest, "--name"))}`;
+  if (sub === "rotate") return printJson(shareFetch("POST", `${path}/rotate`));
+  if (sub === "disable") return printJson(shareFetch("POST", `${path}/disable`));
+  return printJson(shareFetch("POST", `${path}/domains`, { domains: requiredOption(rest, "--domains") }));
 }
 
 function domainsCommand(rest) {
