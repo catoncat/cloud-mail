@@ -19,6 +19,14 @@
     "MAX_RAW_BYTES": "1048576",
     "RETENTION_HOURS": "6"
   },
+  // The mirror of the newest code/link per recipient, so a login code stays
+  // readable while this database is out of its daily row-read quota.
+  "kv_namespaces": [
+    {
+      "binding": "MAIL_CODES",
+      "id": "REPLACE_WITH_KV_NAMESPACE_ID"
+    }
+  ],
   "d1_databases": [
     {
       "binding": "DB",

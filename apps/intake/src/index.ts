@@ -1,9 +1,11 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
 import PostalMime from "postal-mime";
 import { extractCode, extractLink, stripHtml } from "./extract";
+import { latestFieldFromMirror, rememberLatest } from "./mirror";
 
 interface Env {
   DB: D1Database;
+  MAIL_CODES?: KVNamespace;
   MAX_RAW_BYTES?: string;
   RETENTION_HOURS?: string;
 }
@@ -58,6 +60,62 @@ interface ForwardRow {
 }
 
 const DEFAULT_MAX_RAW_BYTES = 1_048_576;
+
+/**
+ * The console polls these two listings every couple of seconds, and the first is a
+ * window-function GROUP BY over every message. At ~35,000 calls a day that was the
+ * account's whole D1 row-read budget (5.83M rows on 2026-10-12, against a 5M free
+ * limit), which took the mail down for the day. The Cache API is counted on its own
+ * quota, so a poll inside the TTL costs no D1 rows at all.
+ *
+ * /admin/latest-code is deliberately NOT cached: a stale code is a failed login.
+ */
+const LISTING_TTL = { mailboxes: 300, recent: 60 };
+
+/** One cached copy per URL and TTL. A miss (or a cache that cannot store) still serves. */
+async function cachedListing(url: URL, ttlSeconds: number, produce: () => Promise<Response>): Promise<Response> {
+  const key = new Request(`https://intake.internal${url.pathname}${url.search}`);
+  let cached: Response | null = null;
+  try {
+    cached = (await caches.default.match(key)) ?? null;
+  } catch {
+    cached = null;
+  }
+  const at = Number(cached?.headers.get("x-intake-cached-at") ?? 0);
+  const fresh = Boolean(cached && at && Date.now() - at < ttlSeconds * 1000);
+  // The state is logged because "is this worker's cache doing anything at all" is
+  // otherwise unanswerable from outside: the Cache API needs no quota, so a hit
+  // shows up as zero D1 rows read, not as anything a caller can see.
+  console.log("listing", { path: url.pathname, state: fresh ? "hit" : "miss", entry: Boolean(cached), ageSeconds: at ? Math.round((Date.now() - at) / 1000) : null });
+  if (cached && fresh) {
+    return answer(await cached.text(), at, "hit");
+  }
+
+  const produced = await produce();
+  if (!produced.ok) return produced; // an error is never worth caching
+  const body = await produced.text();
+  const now = Date.now();
+  try {
+    await caches.default.put(key, new Response(body, {
+      headers: { "content-type": "application/json; charset=utf-8", "x-intake-cached-at": String(now) },
+    }));
+  } catch (error) {
+    console.log("listing_cache_write_failed", { path: url.pathname, error: errorMessage(error) });
+  }
+  return answer(body, now, "miss");
+}
+
+function answer(body: string, at: number, state: "hit" | "miss"): Response {
+  return new Response(body, {
+    headers: {
+      "content-type": "application/json; charset=utf-8",
+      "cache-control": "no-store",
+      "x-intake-cache": state,
+      "x-intake-cached-at": String(at),
+    },
+  });
+}
+
 const DEFAULT_RETENTION_HOURS = 6;
 const CLEANUP_INTERVAL_MS = 15 * 60 * 1000;
 /** Keep each DELETE bounded so a long-idle database cannot produce one huge statement. */
@@ -159,11 +217,11 @@ async function route(request: Request, env: Env): Promise<Response> {
   }
 
   if (request.method === "GET" && url.pathname === "/admin/recent-messages") {
-    return listRecentMessages(url, env);
+    return cachedListing(url, LISTING_TTL.recent, () => listRecentMessages(url, env));
   }
 
   if (request.method === "GET" && url.pathname === "/admin/mailboxes") {
-    return listMailboxes(url, env);
+    return cachedListing(url, LISTING_TTL.mailboxes, () => listMailboxes(url, env));
   }
 
   if (request.method === "GET" && url.pathname === "/admin/latest-code") {
@@ -194,17 +252,6 @@ async function handleEmail(message: ForwardableEmailMessage, env: Env): Promise<
   const parts = splitEmail(recipient);
   if (!parts) {
     message.setReject("Invalid recipient.");
-    return;
-  }
-
-  const domain = await getDomain(parts.domain, env);
-  if (!domain || !domain.enabled) {
-    const forward = await getForward(parts.domain, env);
-    if (forward?.enabled && forward.destination) {
-      await message.forward(forward.destination);
-      return;
-    }
-    message.setReject("Recipient domain is not configured.");
     return;
   }
 
@@ -242,6 +289,31 @@ async function handleEmail(message: ForwardableEmailMessage, env: Env): Promise<
     message_id: messageId,
     subject,
   });
+  const code = extractCode(readable, subject);
+  const link = extractLink(readable, htmlBody);
+
+  // The mirror comes BEFORE the first database read, not merely before the write:
+  // while the account's daily row-read quota is out, even the domain lookup below
+  // throws, and a code that only lives in a failed write is a code nobody reads.
+  // Never fatal: losing the mirror is worth less than losing the mail.
+  try {
+    // the same life as the row the database keeps, no longer, so the mirror can
+    // never answer with a code the retention sweep has already deleted
+    await rememberLatest(env.MAIL_CODES, recipient, { received_at: now, subject, code, link }, retentionHours(env) * 3600);
+  } catch (error) {
+    console.error("mirror_write_failed", { recipient, error: errorMessage(error) });
+  }
+
+  const domain = await getDomain(parts.domain, env);
+  if (!domain || !domain.enabled) {
+    const forward = await getForward(parts.domain, env);
+    if (forward?.enabled && forward.destination) {
+      await message.forward(forward.destination);
+      return;
+    }
+    message.setReject("Recipient domain is not configured.");
+    return;
+  }
 
   // DO NOTHING makes redelivery idempotent against the (recipient, message_id)
   // unique index. Cloudflare retries on any thrown error, and a duplicated OTP
@@ -264,8 +336,8 @@ async function handleEmail(message: ForwardableEmailMessage, env: Env): Promise<
     raw,
     textBody,
     htmlBody,
-    extractCode(readable, subject),
-    extractLink(readable, htmlBody),
+    code,
+    link,
     messageId,
     headersJson,
   ).run();
@@ -320,12 +392,13 @@ async function recordCleanupRun(env: Env): Promise<void> {
   ).bind(String(Date.now())).run();
 }
 
-function retentionCutoff(env: Env): string {
+function retentionHours(env: Env): number {
   const configured = Number.parseInt(env.RETENTION_HOURS ?? "", 10);
-  const retentionHours = Number.isFinite(configured) && configured > 0
-    ? configured
-    : DEFAULT_RETENTION_HOURS;
-  return new Date(Date.now() - retentionHours * 60 * 60 * 1000).toISOString();
+  return Number.isFinite(configured) && configured > 0 ? configured : DEFAULT_RETENTION_HOURS;
+}
+
+function retentionCutoff(env: Env): string {
+  return new Date(Date.now() - retentionHours(env) * 60 * 60 * 1000).toISOString();
 }
 
 async function listDomains(env: Env): Promise<Response> {
@@ -475,13 +548,23 @@ async function latestField(url: URL, env: Env, field: "code" | "link"): Promise<
   const email = normalizeEmail(url.searchParams.get("email") ?? "");
   if (!email) return json({ ok: false, error: "email_required" }, 400);
 
-  const row = await env.DB.prepare(
-    `SELECT id, recipient, subject, received_at, ${field}
-     FROM messages
-     WHERE recipient = ?1 AND ${field} != ''
-     ORDER BY received_at DESC
-     LIMIT 1`,
-  ).bind(email).first<Record<string, string>>();
+  let row: Record<string, string> | null = null;
+  try {
+    row = await env.DB.prepare(
+      `SELECT id, recipient, subject, received_at, ${field}
+       FROM messages
+       WHERE recipient = ?1 AND ${field} != ''
+       ORDER BY received_at DESC
+       LIMIT 1`,
+    ).bind(email).first<Record<string, string>>();
+  } catch (error) {
+    // Out of the account's daily row-read quota, which takes the database away for
+    // hours: the KV mirror of the newest code/link answers instead, so an
+    // unattended sign-in still gets what arrived after this deploy.
+    const answer = await latestFieldFromMirror(env.MAIL_CODES, email, field);
+    console.error("db_read_failed", { email, field, mirrored: answer.status === 200, error: errorMessage(error) });
+    return json(answer.body, answer.status);
+  }
 
   // Say so explicitly. Callers must be able to tell "no code in this mailbox"
   // apart from success, otherwise an empty string reads as a valid answer.
