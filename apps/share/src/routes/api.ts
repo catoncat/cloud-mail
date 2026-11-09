@@ -262,9 +262,9 @@ api.get("/messages", async (c) => {
 
   let items: Awaited<ReturnType<typeof messagesByDomain>> = [];
   if (mailbox) {
-    items = await messagesByMailbox(c.env, mailbox, 200);
+    items = await messagesByMailbox(c.env, mailbox, 100);
   } else if (domain) {
-    items = await messagesByDomain(c.env, domain, 500);
+    items = await messagesByDomain(c.env, domain, 100);
   } else {
     items = await recentMessages(c.env, 100);
   }

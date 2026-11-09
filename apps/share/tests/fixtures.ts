@@ -48,6 +48,37 @@ export function fakeEnv({ domains = DOMAINS, intakeDown = false }: { domains?: D
           .slice(0, Number(url.searchParams.get("limit") ?? 1));
         return Response.json({ ok: true, items });
       }
+      // Per-recipient aggregate, the way intake answers it: counts come from SQL, not
+      // from a page of messages, so a test can tell the two apart.
+      if (url.pathname === "/admin/mailboxes") {
+        const grouped = new Map<string, IntakeMessage[]>();
+        for (const list of mail.values()) {
+          for (const m of list) {
+            const key = String(m.recipient ?? "").toLowerCase();
+            if (!key) continue;
+            grouped.set(key, [...(grouped.get(key) ?? []), m]);
+          }
+        }
+        const items = [...grouped.entries()].map(([recipient, list]) => {
+          const sorted = [...list].sort((a, b) => String(b.received_at).localeCompare(String(a.received_at)));
+          const latest = sorted[0];
+          const withCode = sorted.find((m) => m.code);
+          const [localPart, domain] = recipient.split("@");
+          return {
+            recipient,
+            domain: domain ?? "",
+            local_part: localPart ?? "",
+            messages: list.length,
+            codes: list.filter((m) => m.code).length,
+            last_activity: latest?.received_at ?? "",
+            last_code: withCode?.code ?? "",
+            last_code_at: withCode?.received_at ?? "",
+            latest_sender: latest?.sender ?? "",
+            latest_subject: latest?.subject ?? "",
+          };
+        });
+        return Response.json({ ok: true, items });
+      }
       return Response.json({ ok: false, error: "not_found" }, { status: 404 });
     },
   };

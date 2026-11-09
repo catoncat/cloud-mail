@@ -35,6 +35,8 @@ interface MessageRow {
   link: string;
   message_id: string;
   headers_json: string;
+  /** 1 when the listing served a shortened body (see listingProjection). */
+  body_truncated?: number;
 }
 
 interface MailboxSummaryRow {
@@ -68,9 +70,15 @@ const DEFAULT_MAX_RAW_BYTES = 1_048_576;
  * limit), which took the mail down for the day. The Cache API is counted on its own
  * quota, so a poll inside the TTL costs no D1 rows at all.
  *
+ * The TTL also decides how often the poll pays for a cache miss, and on the free
+ * plan a miss has to fit in 10ms of CPU. A miss expensive enough to be killed can
+ * never write its entry, so every poll after it misses too: on 2026-11-08 one such
+ * miss turned into 2,752 killed requests in four hours. Keep the miss cheap
+ * (listingProjection) and the TTL long.
+ *
  * /admin/latest-code is deliberately NOT cached: a stale code is a failed login.
  */
-const LISTING_TTL = { mailboxes: 300, recent: 60 };
+const LISTING_TTL = { mailboxes: 300, recent: 300 };
 
 /** One cached copy per URL and TTL. A miss (or a cache that cannot store) still serves. */
 async function cachedListing(url: URL, ttlSeconds: number, produce: () => Promise<Response>): Promise<Response> {
@@ -122,7 +130,22 @@ const CLEANUP_INTERVAL_MS = 15 * 60 * 1000;
 const CLEANUP_BATCH_SIZE = 500;
 const CLEANUP_MAX_BATCHES = 20;
 const DEFAULT_LIMIT = 20;
-const MAX_LIMIT = 500;
+/**
+ * Hard cap for one listing request.
+ *
+ * 100 rows of listingProjection is ~90 KB of JSON for a real mailbox; the same 100
+ * rows with full bodies measured 1.5 MB (2.4 MB during the 2026-11-08 flood), which
+ * is 20-30 ms of CPU and over the free plan's 10 ms budget.
+ */
+const MAX_LIMIT = 100;
+/**
+ * Bytes of body a listing may carry per message.
+ *
+ * Text parts are small (99% of stored mail is under 4 KB); the HTML part is what
+ * used to dominate a listing at ~15 KB per message, and it is only needed when a
+ * message has no text part at all.
+ */
+const LISTING_BODY_BYTES = 8000;
 
 /**
  * The JSON API, reachable only through the share Worker's Service Binding.
@@ -463,7 +486,7 @@ async function listMessages(url: URL, env: Env): Promise<Response> {
 
   if (email) {
     const result = await env.DB.prepare(
-      `SELECT ${messageProjection()} FROM messages
+      `SELECT ${listingProjection()} FROM messages
        WHERE recipient = ?1
        ORDER BY received_at DESC
        LIMIT ?2`,
@@ -473,7 +496,7 @@ async function listMessages(url: URL, env: Env): Promise<Response> {
 
   if (domain) {
     const result = await env.DB.prepare(
-      `SELECT ${messageProjection()} FROM messages
+      `SELECT ${listingProjection()} FROM messages
        WHERE domain = ?1
        ORDER BY received_at DESC
        LIMIT ?2`,
@@ -487,7 +510,7 @@ async function listMessages(url: URL, env: Env): Promise<Response> {
 async function listRecentMessages(url: URL, env: Env): Promise<Response> {
   const limit = clampLimit(url.searchParams.get("limit"));
   const result = await env.DB.prepare(
-    `SELECT ${messageProjection()} FROM messages
+    `SELECT ${listingProjection()} FROM messages
      ORDER BY received_at DESC
      LIMIT ?1`,
   ).bind(limit).all<MessageRow>();
@@ -674,7 +697,19 @@ async function getForward(domain: string, env: Env): Promise<ForwardRow | null> 
   return env.DB.prepare("SELECT * FROM forwards WHERE domain = ?1 LIMIT 1").bind(domain).first<ForwardRow>();
 }
 
-function messageProjection(): string {
+/**
+ * The columns a listing may return.
+ *
+ * Bodies are bounded on purpose. A listing is the one query the console runs every
+ * couple of seconds, and its cost is dominated by how many body bytes travel: the
+ * full projection measured 1.5 MB per 100 rows, which is 20-30 ms of CPU and over
+ * the free plan's 10 ms budget. Bounded, the same 100 rows are ~90 KB.
+ *
+ * `html_body` rides along only for messages that have no text part, because that is
+ * the only case where `stripHtml` needs it; 98% of stored mail carries a text part.
+ * `raw` is never part of a listing.
+ */
+function listingProjection(): string {
   return [
     "id",
     "recipient",
@@ -685,11 +720,12 @@ function messageProjection(): string {
     "received_at",
     "raw_size",
     "raw_truncated",
-    "text_body",
-    "html_body",
+    `substr(text_body, 1, ${LISTING_BODY_BYTES}) AS text_body`,
+    `CASE WHEN trim(text_body) = '' THEN substr(html_body, 1, ${LISTING_BODY_BYTES}) ELSE '' END AS html_body`,
     "code",
     "link",
     "message_id",
+    `(length(text_body) > ${LISTING_BODY_BYTES} OR (trim(text_body) = '' AND length(html_body) > ${LISTING_BODY_BYTES})) AS body_truncated`,
   ].join(", ");
 }
 

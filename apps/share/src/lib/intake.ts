@@ -81,12 +81,16 @@ export async function listDomains(env: Env): Promise<Array<{ domain: string; ena
     .filter((i) => i.domain);
 }
 
-export async function messagesByDomain(env: Env, domain: string, limit = 500): Promise<IntakeMessage[]> {
+/**
+ * A domain listing is the widest read the console can ask for, and intake caps it at
+ * 100 rows: past that the answer costs more CPU than the free plan allows.
+ */
+export async function messagesByDomain(env: Env, domain: string, limit = 100): Promise<IntakeMessage[]> {
   const data = await call<{ items?: IntakeMessage[] }>(env, "/admin/messages", { domain, limit: String(limit) });
   return data.items ?? [];
 }
 
-export async function recentMessages(env: Env, limit = 50): Promise<IntakeMessage[]> {
+export async function recentMessages(env: Env, limit = 100): Promise<IntakeMessage[]> {
   const data = await call<{ items?: IntakeMessage[] }>(env, "/admin/recent-messages", { limit: String(limit) });
   return data.items ?? [];
 }
@@ -240,9 +244,16 @@ function usableLink(raw: string): string | null {
   return value;
 }
 
+/**
+ * A listing only carries a bounded slice of the body (intake keeps its CPU budget),
+ * so say when what is shown is not the whole message instead of ending mid-sentence.
+ */
+const TRUNCATED_BODY_NOTICE = "\n\n…（正文较长，已截断，仅显示前 8 KB）";
+
 export function toLatest(item: IntakeMessage, mailbox: string): LatestMessage {
   const html = String(item.html_body ?? "");
-  const text = String(item.text_body ?? "").trim() || stripHtml(html);
+  const body = String(item.text_body ?? "").trim() || stripHtml(html);
+  const text = item.body_truncated ? `${body}${TRUNCATED_BODY_NOTICE}` : body;
   return {
     id: item.id ?? null,
     from: item.sender ?? "",

@@ -38,6 +38,8 @@ export type IntakeMessage = {
   html_body?: string;
   code?: string;
   link?: string;
+  /** Set by intake when a listing shortened the body to fit its CPU budget. */
+  body_truncated?: boolean | number;
 };
 
 export type LatestMessage = {

@@ -1,6 +1,6 @@
-import { domainCounters, guessService, listDomains, messagesByDomain } from "./intake";
+import { domainCounters, guessService, listDomains, mailboxSummaries } from "./intake";
 import { shareUrlByMailbox } from "./store";
-import type { DomainStat, Env, IntakeMessage, MailboxStat, Overview } from "./types";
+import type { DomainStat, Env, MailboxStat, Overview } from "./types";
 
 /** One aggregate query, not one message fetch per domain. */
 export async function domainStats(env: Env): Promise<DomainStat[]> {
@@ -24,33 +24,33 @@ export async function domainStats(env: Env): Promise<DomainStat[]> {
   return stats.sort((a, b) => String(b.lastActivity ?? "").localeCompare(String(a.lastActivity ?? "")) || a.domain.localeCompare(b.domain));
 }
 
+/**
+ * The address book for one domain.
+ *
+ * Built from intake's per-recipient aggregate, not from a page of messages: this
+ * used to pull 500 whole messages (bodies included) over the binding just to count
+ * them, which is both the most expensive query the console could make and a wrong
+ * count the moment a domain had more mail than the page held. The aggregate is one
+ * GROUP BY, already cached for five minutes, and its numbers are the real ones.
+ */
 export async function mailboxStats(env: Env, domain: string, origin: string): Promise<MailboxStat[]> {
-  const [messages, shared] = await Promise.all([
-    messagesByDomain(env, domain),
+  const [summaries, shared] = await Promise.all([
+    mailboxSummaries(env),
     shareUrlByMailbox(env, origin),
   ]);
 
-  const grouped = new Map<string, IntakeMessage[]>();
-  for (const m of messages) {
-    const key = String(m.recipient ?? "").toLowerCase();
-    if (!key) continue;
-    grouped.set(key, [...(grouped.get(key) ?? []), m]);
-  }
-
-  return [...grouped.entries()]
-    .map(([mailbox, list]) => {
-      list.sort((a, b) => String(b.received_at ?? "").localeCompare(String(a.received_at ?? "")));
-      const latest = list[0];
-      const withCode = list.find((m) => m.code);
-      const shareUrl = shared.get(mailbox);
+  return summaries
+    .filter((s) => s.domain === domain)
+    .map((s) => {
+      const shareUrl = shared.get(s.mailbox);
       return {
-        mailbox,
-        localPart: mailbox.split("@")[0] ?? mailbox,
-        domain,
-        messages: list.length,
-        lastCode: withCode?.code ?? null,
-        lastActivity: latest?.received_at ?? null,
-        service: guessService(latest?.sender, latest?.subject),
+        mailbox: s.mailbox,
+        localPart: s.localPart,
+        domain: s.domain,
+        messages: s.messages,
+        lastCode: s.lastCode,
+        lastActivity: s.lastActivity,
+        service: guessService(s.latestSender, s.latestSubject),
         shared: Boolean(shareUrl),
         shareUrl,
       } satisfies MailboxStat;

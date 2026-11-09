@@ -79,6 +79,40 @@ test("toLatest: falls back to stripped HTML when text_body is empty", () => {
   assert.match(result.text, /Hello\s+world/);
 });
 
+test("toLatest: a truncated listing body says so instead of ending mid-sentence", () => {
+  const msg: IntakeMessage = {
+    id: "5",
+    recipient: "u@x.com",
+    sender: "noreply@x.com",
+    subject: "Long",
+    received_at: "",
+    text_body: "Your code is 654321",
+    html_body: "",
+    code: "654321",
+    link: "",
+    body_truncated: 1,
+  };
+  const result = toLatest(msg, "u@x.com");
+  assert.match(result.text, /654321/);
+  assert.match(result.text, /已截断/);
+});
+
+test("toLatest: an untruncated body carries no notice", () => {
+  const msg: IntakeMessage = {
+    id: "6",
+    recipient: "u@x.com",
+    sender: "noreply@x.com",
+    subject: "Short",
+    received_at: "",
+    text_body: "Your code is 111111",
+    html_body: "",
+    code: "111111",
+    link: "",
+    body_truncated: 0,
+  };
+  assert.equal(toLatest(msg, "u@x.com").text, "Your code is 111111");
+});
+
 test("toLatest: valid short code passes through", () => {
   const msg: IntakeMessage = {
     id: "4",
