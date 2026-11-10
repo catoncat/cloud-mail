@@ -2,6 +2,7 @@ import { WorkerEntrypoint } from "cloudflare:workers";
 import PostalMime from "postal-mime";
 import { extractCode, extractLink, stripHtml } from "./extract";
 import { latestFieldFromMirror, rememberLatest } from "./mirror";
+import { listingProjection } from "./projection";
 
 interface Env {
   DB: D1Database;
@@ -138,14 +139,6 @@ const DEFAULT_LIMIT = 20;
  * is 20-30 ms of CPU and over the free plan's 10 ms budget.
  */
 const MAX_LIMIT = 100;
-/**
- * Bytes of body a listing may carry per message.
- *
- * Text parts are small (99% of stored mail is under 4 KB); the HTML part is what
- * used to dominate a listing at ~15 KB per message, and it is only needed when a
- * message has no text part at all.
- */
-const LISTING_BODY_BYTES = 8000;
 
 /**
  * The JSON API, reachable only through the share Worker's Service Binding.
@@ -695,38 +688,6 @@ async function getDomain(domain: string, env: Env): Promise<DomainRow | null> {
 
 async function getForward(domain: string, env: Env): Promise<ForwardRow | null> {
   return env.DB.prepare("SELECT * FROM forwards WHERE domain = ?1 LIMIT 1").bind(domain).first<ForwardRow>();
-}
-
-/**
- * The columns a listing may return.
- *
- * Bodies are bounded on purpose. A listing is the one query the console runs every
- * couple of seconds, and its cost is dominated by how many body bytes travel: the
- * full projection measured 1.5 MB per 100 rows, which is 20-30 ms of CPU and over
- * the free plan's 10 ms budget. Bounded, the same 100 rows are ~90 KB.
- *
- * `html_body` rides along only for messages that have no text part, because that is
- * the only case where `stripHtml` needs it; 98% of stored mail carries a text part.
- * `raw` is never part of a listing.
- */
-function listingProjection(): string {
-  return [
-    "id",
-    "recipient",
-    "domain",
-    "local_part",
-    "sender",
-    "subject",
-    "received_at",
-    "raw_size",
-    "raw_truncated",
-    `substr(text_body, 1, ${LISTING_BODY_BYTES}) AS text_body`,
-    `CASE WHEN trim(text_body) = '' THEN substr(html_body, 1, ${LISTING_BODY_BYTES}) ELSE '' END AS html_body`,
-    "code",
-    "link",
-    "message_id",
-    `(length(text_body) > ${LISTING_BODY_BYTES} OR (trim(text_body) = '' AND length(html_body) > ${LISTING_BODY_BYTES})) AS body_truncated`,
-  ].join(", ");
 }
 
 function splitEmail(email: string): { localPart: string; domain: string } | null {
