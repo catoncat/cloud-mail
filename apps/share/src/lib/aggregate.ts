@@ -1,9 +1,16 @@
-import { domainCounters, guessService, listDomains, mailboxSummaries } from "./intake";
+import { type DomainCounters, domainCounters, guessService, listDomains, mailboxSummaries } from "./intake";
 import { shareUrlByMailbox } from "./store";
 import type { DomainStat, Env, MailboxStat, Overview } from "./types";
 
-/** One aggregate query, not one message fetch per domain. */
-export async function domainStats(env: Env): Promise<DomainStat[]> {
+/**
+ * One aggregate read, shared by everything that needs domain counters.
+ *
+ * `/admin/stats` is a full-table GROUP BY, so asking for it twice in one page load
+ * doubled the most expensive query the console makes.
+ */
+async function domainStatsWithCounters(
+  env: Env,
+): Promise<{ stats: DomainStat[]; counters: Map<string, DomainCounters> }> {
   const [domains, counters] = await Promise.all([
     listDomains(env),
     domainCounters(env),
@@ -21,7 +28,13 @@ export async function domainStats(env: Env): Promise<DomainStat[]> {
     } satisfies DomainStat;
   });
 
-  return stats.sort((a, b) => String(b.lastActivity ?? "").localeCompare(String(a.lastActivity ?? "")) || a.domain.localeCompare(b.domain));
+  stats.sort((a, b) => String(b.lastActivity ?? "").localeCompare(String(a.lastActivity ?? "")) || a.domain.localeCompare(b.domain));
+  return { stats, counters };
+}
+
+/** One aggregate query, not one message fetch per domain. */
+export async function domainStats(env: Env): Promise<DomainStat[]> {
+  return (await domainStatsWithCounters(env)).stats;
 }
 
 /**
@@ -59,10 +72,7 @@ export async function mailboxStats(env: Env, domain: string, origin: string): Pr
 }
 
 export async function overview(env: Env, origin: string, links: number): Promise<Overview> {
-  const [domains, counters] = await Promise.all([
-    domainStats(env),
-    domainCounters(env),
-  ]);
+  const { stats: domains, counters } = await domainStatsWithCounters(env);
   const withMail = domains.filter((d) => d.mailboxes > 0);
 
   let codesToday = 0;

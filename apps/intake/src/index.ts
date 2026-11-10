@@ -79,7 +79,17 @@ const DEFAULT_MAX_RAW_BYTES = 1_048_576;
  *
  * /admin/latest-code is deliberately NOT cached: a stale code is a failed login.
  */
-const LISTING_TTL = { mailboxes: 300, recent: 300 };
+const LISTING_TTL = { mailboxes: 300, recent: 300, stats: 30 };
+
+/**
+ * Cache hits are logged once every HIT_LOG_EVERY, misses always.
+ *
+ * The console polls a filtered listing every few seconds, so an unsampled hit log
+ * is by far the largest source of log events here, and the free plan stops
+ * recording after 200k events a day — the misses are the ones worth keeping.
+ */
+const HIT_LOG_EVERY = 20;
+let cacheHits = 0;
 
 /** One cached copy per URL and TTL. A miss (or a cache that cannot store) still serves. */
 async function cachedListing(url: URL, ttlSeconds: number, produce: () => Promise<Response>): Promise<Response> {
@@ -92,13 +102,17 @@ async function cachedListing(url: URL, ttlSeconds: number, produce: () => Promis
   }
   const at = Number(cached?.headers.get("x-intake-cached-at") ?? 0);
   const fresh = Boolean(cached && at && Date.now() - at < ttlSeconds * 1000);
+  const ageSeconds = at ? Math.round((Date.now() - at) / 1000) : null;
   // The state is logged because "is this worker's cache doing anything at all" is
   // otherwise unanswerable from outside: the Cache API needs no quota, so a hit
   // shows up as zero D1 rows read, not as anything a caller can see.
-  console.log("listing", { path: url.pathname, state: fresh ? "hit" : "miss", entry: Boolean(cached), ageSeconds: at ? Math.round((Date.now() - at) / 1000) : null });
   if (cached && fresh) {
+    if ((cacheHits += 1) % HIT_LOG_EVERY === 0) {
+      console.log("listing", { path: url.pathname, state: "hit", ageSeconds });
+    }
     return answer(await cached.text(), at, "hit");
   }
+  console.log("listing", { path: url.pathname, state: "miss", entry: Boolean(cached), ageSeconds });
 
   const produced = await produce();
   if (!produced.ok) return produced; // an error is never worth caching
@@ -229,6 +243,10 @@ async function route(request: Request, env: Env): Promise<Response> {
   }
 
   if (request.method === "GET" && url.pathname === "/admin/messages") {
+    // Deliberately uncached. The console deletes rows from this same listing, and a
+    // cached page would hand them straight back for the length of its TTL; the call
+    // is made cheap by asking for one page of rows (see /admin/api/messages) and by
+    // poll intervals that match it, not by serving stale mail.
     return listMessages(url, env);
   }
 
@@ -257,7 +275,7 @@ async function route(request: Request, env: Env): Promise<Response> {
   }
 
   if (request.method === "GET" && url.pathname === "/admin/stats") {
-    return messageStats(env);
+    return cachedListing(url, LISTING_TTL.stats, () => messageStats(env));
   }
 
   return text("Not found", 404);
