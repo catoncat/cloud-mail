@@ -174,7 +174,11 @@ async function tick(){
     foot.textContent='更新于 '+new Date().toLocaleTimeString();
   }catch(e){foot.textContent='刷新失败：'+e.message}
 }
-tick();setInterval(tick,8000);
+// A shared link can be opened on many phones at once, and each tick is a Worker
+// request plus a mailbox read, so a hidden tab stops asking and catches up as soon
+// as it is visible again.
+tick();setInterval(function(){if(!document.hidden)tick()},15000);
+document.addEventListener('visibilitychange',function(){if(!document.hidden)tick()});
 document.getElementById('addr').onclick=()=>cp(MAILBOX);
 </script></body></html>`;
 }

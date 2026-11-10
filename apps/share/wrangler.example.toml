@@ -35,8 +35,23 @@ services = [
 [assets]
 directory = "./dist"
 binding = "ASSETS"
-# Worker owns routing; assets are only served when the Worker asks for them.
-run_worker_first = true
+# Every request the Worker sees is one of the free plan's 100,000 a day, including
+# a plain /assets/app.js. Only the paths below need code; the bundler's output is
+# served straight from the asset layer, so one page load costs one request instead
+# of a dozen. Add a path here when you add a Worker route.
+run_worker_first = [
+  "/",
+  "/all-mail",
+  "/admin",
+  "/admin/*",
+  "/api/v1/*",
+  "/mcp",
+  "/mcp/*",
+  "/s/*",
+  "/icons/*",
+  "/sw.js",
+  "/manifest.webmanifest",
+]
 not_found_handling = "none"
 html_handling = "none"
 
