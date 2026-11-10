@@ -18,8 +18,15 @@ export function memoryD1(): Env["DB"] {
     first: async () => db.prepare(sql).get(...params) ?? null,
     all: async () => ({ results: db.prepare(sql).all(...params) }),
     run: async () => ({ meta: { changes: Number(db.prepare(sql).run(...params).changes) } }),
+    // Not part of D1's public shape; batch() needs the statement back.
+    sql,
+    params,
   });
-  return { prepare: (sql: string) => statement(sql) } as unknown as Env["DB"];
+  return {
+    prepare: (sql: string) => statement(sql),
+    batch: async (batch: { sql: string; params: SQLInputValue[] }[]) =>
+      batch.map(({ sql, params }) => ({ meta: { changes: Number(db.prepare(sql).run(...params).changes) } })),
+  } as unknown as Env["DB"];
 }
 
 export type Domain = { domain: string; enabled: boolean };
@@ -82,12 +89,20 @@ export function fakeEnv({ domains = DOMAINS, intakeDown = false }: { domains?: D
       return Response.json({ ok: false, error: "not_found" }, { status: 404 });
     },
   };
+  // Legacy binding: the app only reads it, once, to import records written before
+  // migration 0002. The map starts empty and stays that way unless a test seeds it.
   const kv = new Map<string, string>();
   const SHARE_LINKS = {
     get: async (key: string) => kv.get(key) ?? null,
     put: async (key: string, value: string) => void kv.set(key, value),
     delete: async (key: string) => void kv.delete(key),
-    list: async () => ({ keys: [], list_complete: true }),
+    list: async ({ prefix = "", cursor }: { prefix?: string; cursor?: string } = {}) => {
+      const names = [...kv.keys()].filter((key) => key.startsWith(prefix)).sort();
+      const from = cursor ? Number(cursor) : 0;
+      const page = names.slice(from, from + 1000);
+      const done = from + page.length >= names.length;
+      return { keys: page.map((name) => ({ name })), list_complete: done, cursor: done ? undefined : String(from + 1000) };
+    },
   };
   const env = { INTAKE, SHARE_LINKS, DB: memoryD1(), OPERATOR_KEY: "op-key" } as unknown as Env;
 

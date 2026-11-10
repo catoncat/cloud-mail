@@ -4,7 +4,11 @@ export interface Env {
   /** Operator console and `cloud-mail` CLI (`/admin/api/*`). */
   OPERATOR_KEY?: string;
   CF_API_TOKEN?: string;
-  SHARE_LINKS: KVNamespace;
+  /**
+   * Legacy only: read once to import links, public mailboxes and address notes
+   * written before migration 0002. Nothing writes here any more.
+   */
+  SHARE_LINKS?: KVNamespace;
   /** Tenants and the addresses they own; the agent surfaces (`/mcp`, `/api/v1`) authenticate against it. */
   DB: D1Database;
   ASSETS: Fetcher;

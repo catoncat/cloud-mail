@@ -65,7 +65,7 @@ test("createInbox: an address managed in the console is never handed to a tenant
   for (let i = 0; i < 6; i += 1) {
     const { env, kv } = fakeEnv();
     kv.set("address:support@a.example.com", JSON.stringify({ mailbox: "support@a.example.com", createdAt: "2026-01-01T00:00:00Z" }));
-    kv.set("idx:links", JSON.stringify({ l1: { mailbox: "team@b.example.com", createdAt: "2026-01-01T00:00:00Z" } }));
+    kv.set("link:l1", JSON.stringify({ mailbox: "team@b.example.com", createdAt: "2026-01-01T00:00:00Z" }));
     const { tenant } = await addTenant(env, "alice");
     assert.equal((await createInbox(env, tenant, "support")).email, "support@b.example.com");
     assert.equal((await createInbox(env, tenant, "team")).email, "team@a.example.com");

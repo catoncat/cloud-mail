@@ -18,6 +18,9 @@ routes = [
   { pattern = "inbox.example.com", custom_domain = true }
 ]
 
+# Legacy. Share links, public mailboxes and address notes are D1 rows now; this
+# namespace is read once after migration 0002 to import what is still in it, and can
+# be dropped from the bindings afterwards.
 kv_namespaces = [
   { binding = "SHARE_LINKS", id = "REPLACE_WITH_KV_NAMESPACE_ID" }
 ]

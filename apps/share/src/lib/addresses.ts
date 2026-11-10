@@ -177,14 +177,15 @@ export async function getAddressView(env: Env, origin: string, mailboxInput: unk
   const mailbox = normalizeMailbox(mailboxInput);
   if (!mailbox) return null;
 
-  const [record, links, publicMailboxes, summaries] = await Promise.all([
+  const [record, shares, publicMailboxes, summaries] = await Promise.all([
     store.getAddress(env, mailbox),
-    store.listLinks(env, origin),
+    // Only this address's links: the console asks for one address every few
+    // seconds, so reading everybody's shares here was work thrown away.
+    store.listLinksForMailbox(env, origin, mailbox),
     store.listPublicMailboxes(env),
     mailboxSummaries(env),
   ]);
   const summary = summaries.find((item) => item.mailbox === mailbox);
-  const shares = links.filter((link) => link.mailbox === mailbox);
   if (!record && !summary && shares.length === 0 && !publicMailboxes.has(mailbox)) return null;
   return viewFor(mailbox, record ?? undefined, summary, shares, publicMailboxes);
 }
