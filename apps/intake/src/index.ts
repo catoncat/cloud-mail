@@ -77,9 +77,14 @@ const DEFAULT_MAX_RAW_BYTES = 1_048_576;
  * miss turned into 2,752 killed requests in four hours. Keep the miss cheap
  * (listingProjection) and the TTL long.
  *
+ * `recent` is short because it is the live feed: it polls every five seconds, and at
+ * 300s a page that says it is live showed mail up to five minutes old. With the
+ * bounded projection a miss is 30 bounded rows, so a 30s TTL costs about 86,000 row
+ * reads a day for a tab left open - well inside the 5M allowance.
+ *
  * /admin/latest-code is deliberately NOT cached: a stale code is a failed login.
  */
-const LISTING_TTL = { mailboxes: 300, recent: 300, stats: 30 };
+const LISTING_TTL = { mailboxes: 300, recent: 30, stats: 30 };
 
 /**
  * Cache hits are logged once every HIT_LOG_EVERY, misses always.
