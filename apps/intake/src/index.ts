@@ -62,7 +62,20 @@ interface ForwardRow {
   updated_at: string;
 }
 
-const DEFAULT_MAX_RAW_BYTES = 1_048_576;
+/**
+ * Largest raw message accepted, before MIME parsing.
+ *
+ * Parsing is the CPU-heavy step on this path, and the whole invocation has 10ms on
+ * the free plan. Measured on a synthetic login email (postal-mime 2.7.4, plus code
+ * and link extraction): 20 KB ~1.8ms, 100 KB ~5.7ms, 256 KB ~9.2ms, 1 MB ~36ms,
+ * and 1 MB of HTML with an attachment ~18ms. The old 1 MB limit let one message
+ * spend four times the entire CPU budget, which kills the invocation and hands the
+ * mail back to the sender to retry forever; 256 KB is the largest size that still
+ * fits, and virtually every sign-in mail is under 40 KB.
+ *
+ * Override with MAX_RAW_BYTES when running on a paid plan.
+ */
+const DEFAULT_MAX_RAW_BYTES = 262_144;
 
 /**
  * The console polls these two listings every couple of seconds, and the first is a
