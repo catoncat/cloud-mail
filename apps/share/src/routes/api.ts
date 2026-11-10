@@ -260,13 +260,16 @@ api.get("/messages", async (c) => {
   const page = Math.max(Number(c.req.query("page")) || 1, 1);
   const size = Math.min(Math.max(Number(c.req.query("size")) || 25, 5), 100);
 
+  // Ask intake for exactly the rows this page needs. Fetching MAX_LIMIT on every
+  // poll made a 20-row panel read 100 rows of D1 on every tick.
+  const limit = Math.min(page * size, 100);
   let items: Awaited<ReturnType<typeof messagesByDomain>> = [];
   if (mailbox) {
-    items = await messagesByMailbox(c.env, mailbox, 100);
+    items = await messagesByMailbox(c.env, mailbox, limit);
   } else if (domain) {
-    items = await messagesByDomain(c.env, domain, 100);
+    items = await messagesByDomain(c.env, domain, limit);
   } else {
-    items = await recentMessages(c.env, 100);
+    items = await recentMessages(c.env, limit);
   }
 
   items.sort((a, b) => String(b.received_at ?? "").localeCompare(String(a.received_at ?? "")));

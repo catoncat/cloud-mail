@@ -30,7 +30,9 @@ export function WatchPanel({
   const feed = useQuery({
     queryKey: ["messages", "watch", watch.mailbox],
     queryFn: () => api.messages(apiKey, { mailbox: watch.mailbox, page: 1, size: 20 }),
-    refetchInterval: 3_000,
+    // Every tick is a Worker request plus a page of D1 rows, and a panel can stay
+    // open for hours; five seconds still reads as instant when a code lands.
+    refetchInterval: 5_000,
   });
 
   useEffect(() => {
